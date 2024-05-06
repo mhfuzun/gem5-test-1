@@ -881,8 +881,14 @@ Execute::doInstCommitAccounting(MinorDynInstPtr inst)
     cpu.commitStats[tid]->numOps++;
     cpu.commitStats[tid]
         ->committedInstType[inst->staticInst->opClass()]++;
-    if (in_user_mode) {
-        cpu.commitStats[tid]->numUserOps++;
+    if (inst->isInst()) {
+        if (inst->staticInst->isVector()) {
+            cpu.executeStats[inst->id.threadId]->numVecAluAccesses++;
+        } else if (inst->staticInst->isFloating()) {
+            cpu.executeStats[inst->id.threadId]->numFpAluAccesses++;
+        } else if (inst->staticInst->isInteger()) {
+            cpu.executeStats[inst->id.threadId]->numIntAluAccesses++;
+        }
     }
 
     /* Set the CP SeqNum to the numOps commit number */
