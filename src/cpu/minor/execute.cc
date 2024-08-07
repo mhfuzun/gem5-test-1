@@ -604,6 +604,16 @@ Execute::issue(ThreadID thread_id)
             do {
                 FUPipeline *fu = funcUnits[fu_index];
 
+                // Update ALU access stats.
+                if (inst->staticInst->isVector()) {
+                    cpu.executeStats[inst->id.threadId]->numVecAluAccesses++;
+                } else if (inst->staticInst->isFloating()) {
+                    cpu.executeStats[inst->id.threadId]->numFpAluAccesses++;
+                } else if (inst->staticInst->isInteger()) {
+                    cpu.executeStats[inst->id.threadId]->numIntAluAccesses++;
+                }
+
+
                 DPRINTF(MinorExecute, "Trying to issue inst: %s to FU: %d\n",
                     *inst, fu_index);
 
@@ -881,15 +891,6 @@ Execute::doInstCommitAccounting(MinorDynInstPtr inst)
     cpu.commitStats[tid]->numOps++;
     cpu.commitStats[tid]
         ->committedInstType[inst->staticInst->opClass()]++;
-    if (inst->isInst()) {
-        if (inst->staticInst->isVector()) {
-            cpu.executeStats[inst->id.threadId]->numVecAluAccesses++;
-        } else if (inst->staticInst->isFloating()) {
-            cpu.executeStats[inst->id.threadId]->numFpAluAccesses++;
-        } else if (inst->staticInst->isInteger()) {
-            cpu.executeStats[inst->id.threadId]->numIntAluAccesses++;
-        }
-    }
 
     /* Set the CP SeqNum to the numOps commit number */
     if (inst->traceData)
