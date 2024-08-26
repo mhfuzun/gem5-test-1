@@ -884,7 +884,28 @@ Execute::doInstCommitAccounting(MinorDynInstPtr inst)
     {
         thread->numInst++;
         thread->threadStats.numInsts++;
-        cpu.commitStats[tid]->numInsts++;
+        cpu.commitStats[inst->id.threadId]->numInsts++;
+
+        if (inst->staticInst->isInteger()) {
+            cpu.commitStats[inst->id.threadId]->numIntInsts++;
+        }
+
+        if (inst->staticInst->isFloating()) {
+            cpu.commitStats[inst->id.threadId]->numFpInsts++;
+        }
+
+        if (inst->staticInst->isMemRef()) {
+            cpu.commitStats[inst->id.threadId]->numMemRefs++;
+        }
+
+        if (inst->staticInst->isLoad()) {
+            cpu.commitStats[inst->id.threadId]->numLoadInsts++;
+        }
+
+        if (inst->staticInst->isStore() || inst->staticInst->isAtomic()) {
+            cpu.commitStats[inst->id.threadId]->numStoreInsts++;
+        }
+
         cpu.baseStats.numInsts++;
         if (in_user_mode) {
             cpu.commitStats[tid]->numUserInsts++;
