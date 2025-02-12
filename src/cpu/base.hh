@@ -795,6 +795,8 @@ class BaseCPU : public ClockedObject
 
         /* Number of ops discarded before committing */
         statistics::Scalar numDiscardedOps;
+
+
     };
 
     struct CommitCPUStats: public statistics::Group
@@ -844,6 +846,13 @@ class BaseCPU : public ClockedObject
 
         /* number of control instructions committed by control inst type */
         statistics::Vector committedControl;
+
+        /* number of function calls committed */
+        statistics::Scalar functionCalls;
+
+        /* Number of function calls and returns committed */
+        statistics::Scalar numCallsReturns;
+
         void updateComCtrlStats(const StaticInstPtr staticInst);
 
     };
