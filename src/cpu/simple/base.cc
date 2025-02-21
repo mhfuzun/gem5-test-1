@@ -428,6 +428,8 @@ BaseSimpleCPU::postExecute()
 
     if (curStaticInst->isMemRef()) {
         executeStats[t_info.thread->threadId()]->numMemRefs++;
+        commitStats[t_info.thread->threadId()]->numMemRefs++;
+        t_info.thread->threadStats.numMemRefs++;
     }
 
     if (curStaticInst->isLoad()) {

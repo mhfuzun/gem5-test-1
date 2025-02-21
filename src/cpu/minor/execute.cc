@@ -936,8 +936,11 @@ Execute::doInstCommitAccounting(MinorDynInstPtr inst)
 
     thread->numOp++;
     thread->threadStats.numOps++;
-    cpu.commitStats[tid]->numOps++;
-    cpu.commitStats[tid]
+    if (inst->staticInst->isMemRef()) {
+        thread->threadStats.numMemRefs++;
+    }
+    cpu.commitStats[inst->id.threadId]->numOps++;
+    cpu.commitStats[inst->id.threadId]
         ->committedInstType[inst->staticInst->opClass()]++;
 
     /* Set the CP SeqNum to the numOps commit number */
