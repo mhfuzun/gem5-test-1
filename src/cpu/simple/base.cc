@@ -175,13 +175,15 @@ void
 BaseSimpleCPU::countCommitInst()
 {
     SimpleExecContext& t_info = *threadInfo[curThread];
-    const ThreadID tid = t_info.thread->threadId();
-    const bool in_user_mode = t_info.thread->getIsaPtr()->inUserMode();
+    bool is_nop = curStaticInst->isNop();
 
     if (!curStaticInst->isMicroop() || curStaticInst->isLastMicroop()) {
         // increment thread level and core level numInsts count
         commitStats[t_info.thread->threadId()]->numInsts++;
         executeStats[t_info.thread->threadId()]->numInsts++;
+        if (!is_nop) {
+            commitStats[t_info.thread->threadId()]->numInstsNotNOP++;
+        }
         baseStats.numInsts++;
         if (in_user_mode) {
             commitStats[tid]->numUserInsts++;
@@ -189,9 +191,9 @@ BaseSimpleCPU::countCommitInst()
     }
 
     // increment thread level numOps count
-    commitStats[tid]->numOps++;
-    if (in_user_mode) {
-        commitStats[tid]->numUserOps++;
+    commitStats[t_info.thread->threadId()]->numOps++;
+    if (!is_nop) {
+        commitStats[t_info.thread->threadId()]->numOpsNotNOP++;
     }
 }
 
@@ -426,9 +428,8 @@ BaseSimpleCPU::postExecute()
     assert(curStaticInst);
 
     Addr instAddr = threadContexts[curThread]->pcState().instAddr();
-    auto opclass = curStaticInst->opClass();
-    t_info.issueStats.issuedInstType[curThread][opclass]++;
-
+    auto op_class = curStaticInst->opClass();
+    t_info.issueStats.issuedInstType[curThread][op_class]++;
 
     if (curStaticInst->isMemRef()) {
         executeStats[t_info.thread->threadId()]->numMemRefs++;
@@ -494,7 +495,7 @@ BaseSimpleCPU::postExecute()
     /* End power model statistics */
 
     commitStats[t_info.thread->threadId()]
-        ->committedInstType[curStaticInst->opClass()]++;
+        ->committedInstType[op_class]++;
     commitStats[t_info.thread->threadId()]->updateComCtrlStats(curStaticInst);
 
     /* increment the committed numInsts and numOps stats */
