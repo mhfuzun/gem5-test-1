@@ -139,10 +139,6 @@ class VectorMacroInst : public RiscvMacroInst
     uint32_t vlen;
     int oldDstIdx = -1;
     int vmsrcIdx = -1;
-    const uint8_t vsew;
-    const int8_t vlmul;
-    const uint32_t sew;
-    const float vflmul;
 
     VectorMacroInst(const char* mnem, ExtMachInst _machInst,
                    OpClass __opClass, uint32_t _elen, uint32_t _vlen)
@@ -170,10 +166,6 @@ protected:
     uint32_t vlen;
     int oldDstIdx = -1;
     int vmsrcIdx = -1;
-    const uint8_t vsew;
-    const int8_t vlmul;
-    const uint32_t sew;
-    const float vflmul;
 
     VectorMicroInst(const char *mnem, ExtMachInst _machInst, OpClass __opClass,
       uint32_t _microVl, uint32_t _microIdx, uint32_t _elen, uint32_t _vlen)
@@ -292,12 +284,15 @@ class VectorSlideMicroInst : public VectorMicroInst
     uint32_t vdIdx;
     uint32_t vs2Idx;
     uint32_t vs3Idx;
+    uint32_t vs3Idx;
     VectorSlideMicroInst(const char *mnem, ExtMachInst _machInst,
                          OpClass __opClass, uint32_t _microVl,
                          uint32_t _microIdx, uint32_t _vdIdx, uint32_t _vs2Idx,
                          uint32_t _vs3Idx, uint32_t _elen, uint32_t _vlen)
+                         uint32_t _vs3Idx, uint32_t _elen, uint32_t _vlen)
         : VectorMicroInst(mnem, _machInst, __opClass, _microVl, _microIdx,
                           _elen, _vlen)
+        , vdIdx(_vdIdx), vs2Idx(_vs2Idx), vs3Idx(_vs3Idx)
         , vdIdx(_vdIdx), vs2Idx(_vs2Idx), vs3Idx(_vs3Idx)
     {}
 
@@ -812,10 +807,15 @@ class VPinVdMicroInst : public VectorArithMicroInst
         RegId destRegIdxArr[2];
         const bool hasVdOffset;
         const bool copyVs;
+        RegId destRegIdxArr[2];
+        const bool hasVdOffset;
+        const bool copyVs;
 
     public:
         VPinVdMicroInst(ExtMachInst _machInst, uint32_t _microIdx,
                         uint32_t _numVdPins, uint32_t _elen, uint32_t _vlen,
+                        bool _hasVdOffset=false, bool _copyVs = false,
+                        uint32_t _vsIdx = 0);
                         bool _hasVdOffset=false, bool _copyVs = false,
                         uint32_t _vsIdx = 0);
         Fault execute(ExecContext *, trace::InstRecord *) const override;
