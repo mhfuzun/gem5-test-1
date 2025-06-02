@@ -139,6 +139,10 @@ class VectorMacroInst : public RiscvMacroInst
     uint32_t vlen;
     int oldDstIdx = -1;
     int vmsrcIdx = -1;
+    const uint8_t vsew;
+    const int8_t vlmul;
+    const uint32_t sew;
+    const float vflmul;
 
     VectorMacroInst(const char* mnem, ExtMachInst _machInst,
                    OpClass __opClass, uint32_t _elen, uint32_t _vlen)
@@ -166,6 +170,10 @@ protected:
     uint32_t vlen;
     int oldDstIdx = -1;
     int vmsrcIdx = -1;
+    const uint8_t vsew;
+    const int8_t vlmul;
+    const uint32_t sew;
+    const float vflmul;
 
     VectorMicroInst(const char *mnem, ExtMachInst _machInst, OpClass __opClass,
       uint32_t _microVl, uint32_t _microIdx, uint32_t _elen, uint32_t _vlen)
