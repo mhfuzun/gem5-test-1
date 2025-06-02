@@ -356,6 +356,7 @@ TLB::doTranslate(const RequestPtr &req, ThreadContext *tc,
 
     TlbEntry *e = nullptr;
     if (!memaccess.bypassTLB()) {
+    if (!memaccess.bypassTLB()) {
         e = lookup(vpn, satp.asid, mode, false);
         if (!e) {
             Fault fault = walker->start(tc, translation, req, mode);
@@ -381,6 +382,7 @@ TLB::doTranslate(const RequestPtr &req, ThreadContext *tc,
     }
     else {
         // Don't lookup and don't insert when bypassing the TLB.
+        // Don't lookup and don't insert when bypassing the TLB.
         // We get the translation result back in memory pointed to by
         // TlbEntry *e which is not inserted!
         e = new TlbEntry();
@@ -394,6 +396,7 @@ TLB::doTranslate(const RequestPtr &req, ThreadContext *tc,
     }
 
     Fault fault;
+    if (memaccess.bypassTLB()) {
     if (memaccess.bypassTLB()) {
         fault = NoFault;
     }
@@ -417,23 +420,7 @@ TLB::doTranslate(const RequestPtr &req, ThreadContext *tc,
     if (e && (mode == BaseMMU::Write) && !e->pte.w) {
         DPRINTF(TLB, "Dirty bit not set, repeating PT walk\n");
         fault = walker->start(tc, translation, req, mode);
-        // Atomic translations have translation == nullptr
-        // so the if body is reachable only in timing
-        if (translation != nullptr) {
-            // If there has been a fault already, do not
-            // mark the translation as delayed as that
-            // will block its deletion
-            if (fault != NoFault) {
-                delayed = false;
-            } else {
-                delayed = true;
-            }
-
-            if (memaccess.bypassTLB())
-                delete e;
-            return fault;
-        }
-        else if (fault != NoFault) {
+        if (translation != nullptr || fault != NoFault) {
             if (memaccess.bypassTLB())
                 delete e;
             return fault;
@@ -441,6 +428,7 @@ TLB::doTranslate(const RequestPtr &req, ThreadContext *tc,
     }
 
     if (fault != NoFault) {
+        if (memaccess.bypassTLB())
         if (memaccess.bypassTLB())
             delete e;
         return fault;
@@ -453,6 +441,7 @@ TLB::doTranslate(const RequestPtr &req, ThreadContext *tc,
             vaddr, vpn, satp.asid, paddr);
     req->setPaddr(paddr);
 
+    if (memaccess.bypassTLB())
     if (memaccess.bypassTLB())
         delete e;
 
