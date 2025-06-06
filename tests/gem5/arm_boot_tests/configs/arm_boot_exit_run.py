@@ -222,13 +222,9 @@ board = ArmBoard(
 # Set the Full System workload.
 board.set_workload(
     obtain_resource(
-        (
-            "arm-ubuntu-24.04-boot-with-systemd"
-            if args.systemd
-            else "arm-ubuntu-24.04-boot-no-systemd"
-        ),
+        "arm-ubuntu-24.04-boot-with-systemd",
         resource_directory=args.resource_directory,
-        resource_version=("3.0.0" if args.systemd else "2.0.0"),
+        resource_version="3.0.0",
     ),
 )
 
