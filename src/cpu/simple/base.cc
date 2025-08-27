@@ -186,6 +186,11 @@ BaseSimpleCPU::countCommitInst()
             commitStats[t_info.thread->threadId()]->numInstsNotNOP++;
         }
         baseStats.numInsts++;
+        t_info.thread->threadStats.numInsts++;
+        executeStats[tid]->numInsts++;
+        if (!is_nop) {
+            commitStats[tid]->numInstsNotNOP++;
+        }
         if (in_user_mode) {
             commitStats[tid]->numUserInsts++;
         }
