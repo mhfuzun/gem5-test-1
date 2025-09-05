@@ -1118,7 +1118,7 @@ InstructionQueue::wakeDependents(const DynInstPtr &completed_inst)
 
         // Special case of uniq or control registers.  They are not
         // handled by the IQ and thus have no dependency graph entry.
-        if (dest_reg->isFixedMapping()) {
+        if (dest_reg->isAlwaysReady()) {
             DPRINTF(IQ, "Reg %d [%s] is part of a fix mapping, skipping\n",
                     dest_reg->index(), dest_reg->className());
             continue;
@@ -1376,7 +1376,7 @@ InstructionQueue::doSquash(ThreadID tid)
                     // leaves more room for error.
 
                     if (!squashed_inst->readySrcIdx(src_reg_idx) &&
-                        !src_reg->isFixedMapping()) {
+                        !src_reg->isAlwaysReady()) {
                         dependGraph.remove(src_reg->flatIndex(),
                                            squashed_inst);
                     }
@@ -1433,7 +1433,7 @@ InstructionQueue::doSquash(ThreadID tid)
         {
             PhysRegIdPtr dest_reg =
                 squashed_inst->renamedDestIdx(dest_reg_idx);
-            if (dest_reg->isFixedMapping()){
+            if (dest_reg->isAlwaysReady()) {
                 continue;
             }
             assert(dependGraph.empty(dest_reg->flatIndex()));
@@ -1471,7 +1471,7 @@ InstructionQueue::addToDependents(const DynInstPtr &new_inst)
             // hasn't become ready while the instruction was in flight
             // between stages.  Only if it really isn't ready should
             // it be added to the dependency graph.
-            if (src_reg->isFixedMapping()) {
+            if (src_reg->isAlwaysReady()) {
                 continue;
             } else if (!regScoreboard[src_reg->flatIndex()]) {
                 DPRINTF(IQ, "Instruction PC %s has src reg %i (%s) that "
@@ -1515,7 +1515,7 @@ InstructionQueue::addToProducers(const DynInstPtr &new_inst)
 
         // Some registers have fixed mapping, and there is no need to track
         // dependencies as these instructions must be executed at commit.
-        if (dest_reg->isFixedMapping()) {
+        if (dest_reg->isAlwaysReady()) {
             continue;
         }
 
