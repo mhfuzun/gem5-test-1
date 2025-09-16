@@ -139,6 +139,11 @@ class Matrix_Unit(FUDesc):
     count = 1
 
 
+class System_Unit(FUDesc):
+    opList = [OpDesc(opClass="System")]
+    count = 1
+
+
 class PredALU(FUDesc):
     opList = [OpDesc(opClass="SimdPredAlu")]
     count = 1
