@@ -99,7 +99,6 @@ class OpClass(Enum):
         "MemWrite",
         "FloatMemRead",
         "FloatMemWrite",
-        "IprAccess",
         "InstPrefetch",
         "SimdUnitStrideLoad",
         "SimdUnitStrideStore",
