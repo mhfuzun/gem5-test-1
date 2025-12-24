@@ -24,6 +24,14 @@ sudo apt install -y \
   build-essential \
   git \
   m4
+sudo apt install gcc-riscv64-linux-gnu
+
+# Uyarılar için gerekli olanlar:
+sudo apt install libgoogle-perftools-dev
+sudo apt install libpng-dev
+sudo apt install libhdf5-dev
+sudo apt install protobuf-compiler libprotobuf-dev
+sudo apt install libcapstone-dev
 ```
 ## Gereksinimler (Her Cihazda)
 
@@ -107,4 +115,5 @@ ilk defa için:
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+scons build/RISCV/gem5.opt -j$(nproc)
 ```
