@@ -117,3 +117,8 @@ source venv/bin/activate
 pip install -r requirements.txt
 scons build/RISCV/gem5.opt -j$(nproc)
 ```
+
+vs-code açlışında:
+```bash
+source venv/bin/activate
+```
