@@ -15,6 +15,17 @@ Amaç:
 ---
 
 ## Gereksinimler (Her Cihazda)
+```bash
+sudo apt install -y \
+  python3-full \
+  python3-venv \
+  python3-dev \
+  scons \
+  build-essential \
+  git \
+  m4
+```
+## Gereksinimler (Her Cihazda)
 
 - Git
 - Docker Desktop
@@ -27,9 +38,9 @@ Amaç:
 
 ## Repo Yapısı (Önerilen)
 ```
-gem5/ 
-├── .devcontainer/ 
-│ ├── devcontainer.json 
+gem5/
+├── .devcontainer/
+│ ├── devcontainer.json
 │ └── Dockerfile
 ├── configs/
 ├── src/
@@ -88,4 +99,12 @@ code .
 VS Code otomatik olarak şunu sorar:
 “Reopen in Container?”
 → Yes
+```
+
+## gem5 build
+ilk defa için:
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```

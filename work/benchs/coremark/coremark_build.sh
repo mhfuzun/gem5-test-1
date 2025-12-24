@@ -4,6 +4,7 @@ make -C $dir \
 make -C $dir \
      CC=riscv64-linux-gnu-gcc \
      PORT_DIR=posix \
-     ITERATIONS=10 \
+     ITERATIONS=1 \
+     DEBUG=1 \
      XCFLAGS="-static -O3 -march=rv64g -mabi=lp64d" \
      link

@@ -1,0 +1,9 @@
+#!/bin/sh
+
+echo "Boot complete, running CoreMark"
+
+cd ./work/benchs/coremark/coremark/
+./coremark.exe
+
+echo "CoreMark finished"
+m5 exit
