@@ -351,6 +351,7 @@ if not args.bare_metal:
     if args.command_line:
         system.workload.command_line = args.command_line
     else:
+<<<<<<< HEAD
         kernel_cmd = ["console=ttyS0", "root=/dev/vda", "ro"]
         # kernel_cmd = [
         #     "console=ttyS0",
@@ -358,6 +359,15 @@ if not args.bare_metal:
         #     "rw",
         #     "init=/test/linux-init-rutine.sh",
         # ]
+=======
+        # kernel_cmd = ["console=ttyS0", "root=/dev/vda", "ro"]
+        kernel_cmd = [
+            "console=ttyS0",
+            "root=/dev/vda",
+            "rw",
+            "init=/test/testbench",
+        ]
+>>>>>>> d526b2f8a8 (tests: linux boot ve test  kodu çalışıtırldı.)
         system.workload.command_line = " ".join(kernel_cmd)
 
     # DTB filename (auto-generate if not specified)
