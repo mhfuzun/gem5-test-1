@@ -1,11 +1,17 @@
 #!/bin/sh
 
-GEM5_ROOT=$(cd "$(dirname "$0")/.." && pwd)
+GEM5_BINARY="../build/RISCV/gem5.opt"
+CONFIG_SCRIPT="run.py"
 
-$GEM5_ROOT/build/RISCV/gem5.opt \
-  $GEM5_ROOT/configs/example/gem5_library/riscv-fs.py \
-  --script coremark.rcS \
-  --cpu O3CPU \
-  --caches \
-  --l2cache \
-  --mem-size 2GB
+# Mount the disk image
+mkdir -p mnt
+sudo mount -o loop,offset=<offset> riscv-disk.img mnt
+
+# Copy your binary
+sudo cp ./benchs/hello_world/hello mnt/root/
+
+# Unmount
+sudo umount mnt
+
+# Run gem5
+${GEM5_BINARY} ${CONFIG_SCRIPT}

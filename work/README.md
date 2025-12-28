@@ -122,3 +122,101 @@ vs-code açlışında:
 ```bash
 source venv/bin/activate
 ```
+boot-test klasörü:
+https://www.gem5.org/documentation/gem5art/tutorials/boot-tutorial
+
+mkdir boot-tests
+cd boot-tests
+git init
+git remote add origin https://your-remote-add/boot-tests.git
+
+virtualenv -p python3 venv
+source venv/bin/activate
+
+pip install gem5art-artifact gem5art-run gem5art-tasks
+
+mkdir disk-image
+
+Celuk (TOBB):
+```bash
+sudo apt install \
+build-essential \
+git \
+m4 \
+scons \
+zlib1g \
+zlib1g-dev \
+libprotobuf-dev \
+protobuf-compiler \
+libprotoc-dev \
+libgoogle-perftools-dev \
+python3-dev \
+python3-six \
+python-is-python3 \
+libboost-all-dev \
+pkg-config
+```
+
+### Required Downloads
+
+Download prebuilt ucanlinux riscv disk image from here:
+
+dist.gem5.org/dist/v22-1/images/riscv/busybox/riscv-disk.img.gz
+
+Download prebuilt bootloader from here:
+
+https://github.com/UCanLinux/riscv64-sample/blob/master/bbl
+
+```bash
+$ ./build/RISCV/gem5.opt ./configs/example/riscv/fs_linux.py --caches --l1i_size=16kB --l1d_size=16kB --l2cache --l2_size=256kB --mem-type=DDR4_2400_8x8 --mem-size=1GB --cpu-type=TimingSimpleCPU --kernel=./boot-tests2/bbl --disk-image=./boot-tests2/riscv-disk.img
+```
+
+[--cpu-type {AtomicSimpleCPU,BaseAtomicSimpleCPU,BaseMinorCPU,BaseNonCachingSimpleCPU,BaseO3CPU,BaseTimingSimpleCPU,DerivO3CPU,MinorCPU,NonCachingSimpleCPU,O3CPU,RiscvAtomicSimpleCPU,RiscvMinorCPU,RiscvNonCachingSimpleCPU,RiscvO3CPU,RiscvTimingSimpleCPU,TimingSimpleCPU}]
+
+### risc-v linux içine program ekleme
+```bash
+cd ./boot-tests2/
+mkdir -p ./tmp/riscv-rootfs
+sudo mount -o loop riscv-disk.img ./tmp/riscv-rootfs
+sudo mkdir -p ./tmp/riscv-rootfs/test
+riscv64-linux-gnu-gcc \
+  -static \
+  -O2 \
+  -I../include \
+  ../util/m5/src/abi/riscv/m5op.S \
+  testbench.c \
+  -o testbench
+sudo cp testbench ./tmp/riscv-rootfs/test/testbench
+sudo chmod +x ./tmp/riscv-rootfs/test/testbench
+riscv64-linux-gnu-readelf -l testbench | grep interpreter
+sync
+sudo umount ./tmp/riscv-rootfs
+```
+
+Tekrar yükleme
+```bash
+sudo mount -o loop riscv-disk.img ./tmp/riscv-rootfs
+sudo cp testbench ./tmp/riscv-rootfs/test/testbench
+sudo chmod +x ./tmp/riscv-rootfs/test/testbench
+riscv64-linux-gnu-readelf -l testbench | grep interpreter
+sync
+sudo umount ./tmp/riscv-rootfs
+echo done!
+```
+
+```Python
+kernel_cmd = [
+    "console=ttyS0",
+    "root=/dev/vda",
+    "rw",
+    "init=/test/testbench"
+]
+system.workload.command_line = " ".join(kernel_cmd)
+```
+#### Çalışma akışı (beklenen):
+Linux boot eder
+/test/testbench PID 1 olur
+testbench çalışır
+m5_exit() çağrılır
+gem5 kapanır
+m5out/stats.txt oluşur
