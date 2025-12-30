@@ -226,4 +226,5 @@ m5out/stats.txt oluşur
 git add .     # değişiklikleri güncelle
 git status    # kontrol et
 pre-commit run --all-files
+git commit -m "<msg>" # message formatına uyulmalı
 ```
