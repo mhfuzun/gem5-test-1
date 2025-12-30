@@ -365,7 +365,7 @@ if not args.bare_metal:
             "console=ttyS0",
             "root=/dev/vda",
             "rw",
-            "init=/test/testbench",
+            "init=/test/coremark",
         ]
 >>>>>>> d526b2f8a8 (tests: linux boot ve test  kodu çalışıtırldı.)
         system.workload.command_line = " ".join(kernel_cmd)
