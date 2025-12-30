@@ -168,14 +168,14 @@ Download prebuilt bootloader from here:
 https://github.com/UCanLinux/riscv64-sample/blob/master/bbl
 
 ```bash
-$ ./build/RISCV/gem5.opt ./configs/example/riscv/fs_linux.py --caches --l1i_size=16kB --l1d_size=16kB --l2cache --l2_size=256kB --mem-type=DDR4_2400_8x8 --mem-size=1GB --cpu-type=TimingSimpleCPU --kernel=./boot-tests2/bbl --disk-image=./boot-tests2/riscv-disk.img
+$ ./build/RISCV/gem5.opt ./configs/example/riscv/fs_linux.py --caches --l1i_size=16kB --l1d_size=16kB --l2cache --l2_size=256kB --mem-type=DDR4_2400_8x8 --mem-size=1GB --cpu-type=TimingSimpleCPU --kernel=./boot-tests/bbl --disk-image=./boot-tests/riscv-disk.img
 ```
 
 [--cpu-type {AtomicSimpleCPU,BaseAtomicSimpleCPU,BaseMinorCPU,BaseNonCachingSimpleCPU,BaseO3CPU,BaseTimingSimpleCPU,DerivO3CPU,MinorCPU,NonCachingSimpleCPU,O3CPU,RiscvAtomicSimpleCPU,RiscvMinorCPU,RiscvNonCachingSimpleCPU,RiscvO3CPU,RiscvTimingSimpleCPU,TimingSimpleCPU}]
 
 ### risc-v linux içine program ekleme
 ```bash
-cd ./boot-tests2/
+cd ./boot-tests/
 mkdir -p ./tmp/riscv-rootfs
 sudo mount -o loop riscv-disk.img ./tmp/riscv-rootfs
 sudo mkdir -p ./tmp/riscv-rootfs/test
@@ -220,3 +220,10 @@ testbench çalışır
 m5_exit() çağrılır
 gem5 kapanır
 m5out/stats.txt oluşur
+
+# commit işlemleri
+```bash
+git add .     # değişiklikleri güncelle
+git status    # kontrol et
+pre-commit run --all-files
+```
