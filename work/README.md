@@ -167,8 +167,31 @@ Download prebuilt bootloader from here:
 
 https://github.com/UCanLinux/riscv64-sample/blob/master/bbl
 
+#### or
+Ubuntu:
+Download riscv64 linux image from here:
+https://old-releases.ubuntu.com/releases/22.04.3/ubuntu-22.04.3-preinstalled-server-riscv64+unmatched.img.xz
+
+Extract the disk image:
+xz -d -v ubuntu-22.04.3-preinstalled-server-riscv64+unmatched.img.xz
+
+Download bootloader image from here:
+http://dist.gem5.org/dist/v22-1/kernels/riscv/static/bootloader-vmlinux-5.10
 ```bash
-$ ./build/RISCV/gem5.opt ./configs/example/riscv/fs_linux.py --caches --l1i_size=16kB --l1d_size=16kB --l2cache --l2_size=256kB --mem-type=DDR4_2400_8x8 --mem-size=1GB --cpu-type=TimingSimpleCPU --kernel=./boot-tests/bbl --disk-image=./boot-tests/riscv-disk.img
+#UcanLinux
+$ ./build/RISCV/gem5.opt ./configs/example/riscv/fs_linux.py --caches --l1i_size=16kB --l1d_size=16kB --l2cache --l2_size=256kB --mem-type=DDR4_2400_8x8 --mem-size=3GB --cpu-type=TimingSimpleCPU --kernel=./boot-tests/bbl --disk-image=./boot-tests/riscv_disk.img
+
+# Ubuntu
+./build/RISCV/gem5.opt \
+./configs/example/riscv/fs_linux.py \
+--caches --l1i_size=16kB --l1d_size=16kB \
+--l2cache --l2_size=256kB \
+--mem-type=DDR4_2400_8x8 \
+--mem-size=3GB \
+--cpu-type=TimingSimpleCPU \
+--kernel=./boot-tests/bootloader-vmlinux-5.10 \
+--disk-image=./boot-tests/ubuntu-22.04.3-preinstalled-server-riscv64+unmatched.img \
+--command-line="console=ttyS0 root=/dev/vda1 ro"
 ```
 
 [--cpu-type {AtomicSimpleCPU,BaseAtomicSimpleCPU,BaseMinorCPU,BaseNonCachingSimpleCPU,BaseO3CPU,BaseTimingSimpleCPU,DerivO3CPU,MinorCPU,NonCachingSimpleCPU,O3CPU,RiscvAtomicSimpleCPU,RiscvMinorCPU,RiscvNonCachingSimpleCPU,RiscvO3CPU,RiscvTimingSimpleCPU,TimingSimpleCPU}]
@@ -177,7 +200,7 @@ $ ./build/RISCV/gem5.opt ./configs/example/riscv/fs_linux.py --caches --l1i_size
 ```bash
 cd ./boot-tests/
 mkdir -p ./tmp/riscv-rootfs
-sudo mount -o loop riscv-disk.img ./tmp/riscv-rootfs
+sudo mount -o loop riscv_disk.img ./tmp/riscv-rootfs
 sudo mkdir -p ./tmp/riscv-rootfs/test
 riscv64-linux-gnu-gcc \
   -static \
@@ -221,7 +244,18 @@ m5_exit() çağrılır
 gem5 kapanır
 m5out/stats.txt oluşur
 
-# commit işlemleri
+#### Boot Linux'u dinleme:
+```bash
+# derle
+cd ./util/term
+make
+make install
+
+# çalıştır
+./util/term/m5term localhost 3456
+```
+
+## commit işlemleri
 ```bash
 git add .     # değişiklikleri güncelle
 git status    # kontrol et

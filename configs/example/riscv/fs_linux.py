@@ -345,7 +345,7 @@ if not args.bare_metal:
             "console=ttyS0",
             "root=/dev/vda",
             "rw",
-            "init=/test/coremark",
+            "init=/test/linux-init-rutine.sh",
         ]
         system.workload.command_line = " ".join(kernel_cmd)
 
