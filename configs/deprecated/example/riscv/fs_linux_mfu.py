@@ -136,7 +136,7 @@ def generateDtb(system):
 
     node = FdtNode("chosen")
     node.append(FdtPropertyStrings("bootargs", [system.workload.command_line]))
-    node.append(FdtPropertyStrings("stdout-path", ["/soc/uart@10000000"]))
+    node.append(FdtPropertyStrings("stdout-path", ["/uart@10000000"]))
     root.append(node)
 
     fdt = Fdt()
@@ -182,7 +182,7 @@ np = args.num_cpus
 
 # ---------------------------- Setup System ---------------------------- #
 # Default Setup
-system = RiscvSystem()
+system = System()
 mdesc = SysConfig(
     disks=args.disk_image,
     rootdev=args.root_device,
@@ -205,9 +205,8 @@ elif not args.bootloader:
     system.workload = RiscvLinux(**workload_args)
     system.workload.object_file = args.kernel
 else:
-    assert len(args.bootloader) == 1, "Please specify only one bootloader"
     system.workload = RiscvBootloaderKernelWorkload(**workload_args)
-    system.workload.bootloader_filename = args.bootloader[0]
+    system.workload.bootloader_filename = args.bootloader
     system.workload.object_file = args.kernel
 
 system.iobus = IOXBar()
@@ -221,17 +220,7 @@ system.platform = HiFive()
 # RTCCLK (Set to 100MHz for faster simulation)
 system.platform.rtc = RiscvRTC(frequency=Frequency("100MHz"))
 system.platform.clint.int_pin = system.platform.rtc.int_pin
-
-system.iobus.cpu_side_ports = system.platform.pci_host.up_request_port()
-system.iobus.mem_side_ports = system.platform.pci_host.up_response_port()
-
-system.platform.pci_bus.cpu_side_ports = (
-    system.platform.pci_host.down_request_port()
-)
-system.platform.pci_bus.default = system.platform.pci_host.down_response_port()
-system.platform.pci_bus.config_error_port = (
-    system.platform.pci_host.config_error.pio
-)
+system.platform.pci_host.pio = system.iobus.mem_side_ports
 
 # VirtIOMMIO
 if args.disk_image:
@@ -351,7 +340,6 @@ if not args.bare_metal:
     if args.command_line:
         system.workload.command_line = args.command_line
     else:
-<<<<<<< HEAD
         kernel_cmd = ["console=ttyS0", "root=/dev/vda", "ro"]
         # kernel_cmd = [
         #     "console=ttyS0",
@@ -359,15 +347,6 @@ if not args.bare_metal:
         #     "rw",
         #     "init=/test/linux-init-rutine.sh",
         # ]
-=======
-        # kernel_cmd = ["console=ttyS0", "root=/dev/vda", "ro"]
-        kernel_cmd = [
-            "console=ttyS0",
-            "root=/dev/vda",
-            "rw",
-            "init=/test/linux-init-rutine.sh",
-        ]
->>>>>>> d526b2f8a8 (tests: linux boot ve test  kodu çalışıtırldı.)
         system.workload.command_line = " ".join(kernel_cmd)
 
     # DTB filename (auto-generate if not specified)
