@@ -340,13 +340,13 @@ if not args.bare_metal:
     if args.command_line:
         system.workload.command_line = args.command_line
     else:
-        # kernel_cmd = ["console=ttyS0", "root=/dev/vda", "ro"]
-        kernel_cmd = [
-            "console=ttyS0",
-            "root=/dev/vda",
-            "rw",
-            "init=/test/linux-init-rutine.sh",
-        ]
+        kernel_cmd = ["console=ttyS0", "root=/dev/vda", "ro"]
+        # kernel_cmd = [
+        #     "console=ttyS0",
+        #     "root=/dev/vda",
+        #     "rw",
+        #     "init=/test/linux-init-rutine.sh",
+        # ]
         system.workload.command_line = " ".join(kernel_cmd)
 
     # DTB filename (auto-generate if not specified)

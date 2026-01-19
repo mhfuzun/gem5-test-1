@@ -179,7 +179,11 @@ Download bootloader image from here:
 http://dist.gem5.org/dist/v22-1/kernels/riscv/static/bootloader-vmlinux-5.10
 ```bash
 #UcanLinux
-$ ./build/RISCV/gem5.opt ./configs/example/riscv/fs_linux.py --caches --l1i_size=16kB --l1d_size=16kB --l2cache --l2_size=256kB --mem-type=DDR4_2400_8x8 --mem-size=3GB --cpu-type=TimingSimpleCPU --kernel=./boot-tests/bbl --disk-image=./boot-tests/riscv_disk.img
+$ ./build/RISCV/gem5.opt ./configs/example/riscv/fs_linux.py \
+--caches --l1i_size=16kB --l1d_size=16kB --l2cache --l2_size=256kB --mem-type=DDR4_2400_8x8 --mem-size=3GB --cpu-type=TimingSimpleCPU \
+--kernel=./boot-tests/bbl \
+--disk-image=./boot-tests/riscv_disk.img \
+--command-line="console=ttyS0 root=/dev/vda ro"
 
 # Ubuntu
 ./build/RISCV/gem5.opt \
@@ -192,6 +196,18 @@ $ ./build/RISCV/gem5.opt ./configs/example/riscv/fs_linux.py --caches --l1i_size
 --kernel=./boot-tests/bootloader-vmlinux-5.10 \
 --disk-image=./boot-tests/ubuntu-22.04.3-preinstalled-server-riscv64+unmatched.img \
 --command-line="console=ttyS0 root=/dev/vda1 ro"
+
+# Ubuntu (minimal)
+./build/RISCV/gem5.opt \
+  ./configs/example/riscv/fs_linux.py \
+  --caches --l1i_size=16kB --l1d_size=16kB \
+  --l2cache --l2_size=256kB \
+  --mem-type=DDR4_2400_8x8 \
+  --mem-size=10GB \
+  --cpu-type=AtomicSimpleCPU \
+  --kernel=./boot-tests/bootloader-vmlinux-5.10 \
+  --disk-image=./boot-tests/ubuntu-riscv-min.raw.img \
+  --command-line="console=ttyS0 root=/dev/vda ro"
 ```
 
 [--cpu-type {AtomicSimpleCPU,BaseAtomicSimpleCPU,BaseMinorCPU,BaseNonCachingSimpleCPU,BaseO3CPU,BaseTimingSimpleCPU,DerivO3CPU,MinorCPU,NonCachingSimpleCPU,O3CPU,RiscvAtomicSimpleCPU,RiscvMinorCPU,RiscvNonCachingSimpleCPU,RiscvO3CPU,RiscvTimingSimpleCPU,TimingSimpleCPU}]
@@ -244,7 +260,7 @@ m5_exit() çağrılır
 gem5 kapanır
 m5out/stats.txt oluşur
 
-#### Boot Linux'u dinleme:
+#### Boot Linux'u dinleme (test edildi)
 ```bash
 # derle
 cd ./util/term
@@ -253,6 +269,290 @@ make install
 
 # çalıştır
 ./util/term/m5term localhost 3456
+```
+
+#### ubuntu image oluşturma (test edildi)
+```bash
+# ilk defa için buradan başlanır.
+# gerekli araçlar
+sudo apt update
+sudo apt install -y \
+  debootstrap \
+  qemu-user-static \
+  binfmt-support \
+  parted \
+  e2fsprogs
+
+# Disk image oluştur
+dd if=/dev/zero of=ubuntu-riscv.img bs=1M count=8192
+mkfs.ext4 ubuntu-riscv.img
+
+# mount edilir
+sudo mkdir -p /mnt/ubuntu-riscv
+sudo mount ubuntu-riscv.img /mnt/ubuntu-riscv
+
+# RISC-V minimal Ubuntu kur (Jammy önerilir)
+sudo debootstrap \
+  --arch=riscv64 \
+  --foreign \
+  jammy \
+  /mnt/ubuntu-riscv \
+  http://ports.ubuntu.com/
+
+# QEMU RISC-V binary ekle (host’ta chroot için):
+sudo cp /usr/bin/qemu-riscv64-static /mnt/ubuntu-riscv/usr/bin/
+
+sudo chroot /mnt/ubuntu-riscv /debootstrap/debootstrap --second-stage
+
+#########################################################
+# daha öncesi, önceden yapılmış ise buradan başlanabilir.
+sudo mount ubuntu-riscv.img /mnt/ubuntu-riscv
+#########################################################
+# ubuntuya bağlan
+sudo chroot /mnt/ubuntu-riscv
+
+# Gereksiz servisleri kaldır (hata verebilir, atla)
+apt purge -y \
+  snapd \
+  cloud-init \
+  systemd-timesyncd \
+  systemd-resolved \
+  rsyslog
+
+apt autoremove -y
+
+# SPEC / PARSEC için minimum paketler
+apt install -y \
+  build-essential \
+  bash \
+  coreutils \
+  findutils \
+  grep \
+  sed \
+  perl \
+  python3 \
+  make \
+  libstdc++6 \
+  libgcc-s1
+
+# Login ayarla
+passwd root
+
+# fstab oluştur
+cat > /etc/fstab <<EOF
+/dev/vda  /  ext4  defaults  0 1
+EOF
+
+# Konsol ayarı (kritik)
+systemctl disable getty@tty1.service
+ln -sf /lib/systemd/system/serial-getty@.service /etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service
+
+# Serial console (en kritik)
+systemctl enable serial-getty@ttyS0.service
+systemctl disable getty@tty1.service
+
+# Gereksiz servisleri devre dışı bırak
+systemctl disable \
+  apt-daily.service \
+  apt-daily.timer \
+  apt-daily-upgrade.service \
+  apt-daily-upgrade.timer \
+  systemd-journald.service \
+  systemd-logind.service
+
+# journald’i minimal moda al
+cat > /etc/systemd/journald.conf <<EOF
+[Journal]
+Storage=volatile
+RuntimeMaxUse=1M
+EOF
+
+# check point ve diğer gem5 terminal talimatları için
+# kurulması gerekir.
+apt install -y gem5-m5ops
+
+# ek optimizasyonlar
+
+# Disk’i kapat
+exit
+sudo umount /mnt/ubuntu-riscv
+
+# Sparse olmayan kopya
+cp --sparse=never ubuntu-riscv.img ubuntu-riscv.raw.img
+
+# gem5 ile çalıştırma
+./build/RISCV/gem5.opt \
+  ./configs/example/riscv/fs_linux.py \
+  --caches --l1i_size=16kB --l1d_size=16kB \
+  --l2cache --l2_size=256kB \
+  --mem-type=DDR4_2400_8x8 \
+  --mem-size=10GB \
+  --cpu-type=AtomicSimpleCPU \
+  --kernel=./boot-tests/bootloader-vmlinux-5.10 \
+  --disk-image=./boot-tests/ubuntu-riscv-min.raw.img \
+  --command-line="console=ttyS0 \
+    root=/dev/vda \
+    rootfstype=ext4 \
+    rw \
+    rootflags=errors=remount-ro \
+    fsck.repair=yes \
+    systemd.unit=multi-user.target \
+    quiet"
+
+# systemd olmadan
+./build/RISCV/gem5.opt \
+  ./configs/example/riscv/fs_linux.py \
+  --caches --l1i_size=16kB --l1d_size=16kB \
+  --l2cache --l2_size=256kB \
+  --mem-type=DDR4_2400_8x8 \
+  --mem-size=10GB \
+  --cpu-type=AtomicSimpleCPU \
+  --kernel=./boot-tests/bootloader-vmlinux-5.10 \
+  --disk-image=./boot-tests/ubuntu-riscv-min.raw.img \
+  --command-line="console=ttyS0 \
+    root=/dev/vda ro \
+    init=/bin/bash"
+```
+
+##### Optimizasyon detayları (test edildi)
+```bash
+# Çalışması GEREKMEYEN her şeyi kapat
+systemctl disable \
+  apt-daily.service \
+  apt-daily.timer \
+  apt-daily-upgrade.service \
+  apt-daily-upgrade.timer \
+  systemd-journald.service \
+  systemd-logind.service \
+  systemd-networkd.service \
+  systemd-resolved.service \
+  systemd-udevd.service \
+  systemd-tmpfiles-setup.service \
+  systemd-tmpfiles-clean.service \
+  rsyslog.service
+
+# journald’i tamamen kapat (çok büyük kazanç)
+systemctl mask systemd-journald.service
+
+# Tek konsol bırak
+systemctl disable getty@tty1.service
+systemctl enable serial-getty@ttyS0.service
+
+# fstab’ı ultra minimal yap
+cat > /etc/fstab <<EOF
+/dev/vda  /  ext4  ro,noatime,nodiratime  0 1
+EOF
+
+# Çalışmayacak her şeyi sil
+apt purge -y \
+  bash-completion \
+  man-db \
+  manpages \
+  info \
+  vim \
+  nano \
+  less \
+  perl-doc \
+  python3-doc \
+  locales \
+  ubuntu-standard
+
+# Locale’leri kapat
+rm -rf /usr/share/locale/*
+rm -rf /usr/lib/locale/*
+
+systemctl set-default multi-user.target
+systemctl disable systemd-timesyncd.service
+systemctl disable systemd-resolved.service
+systemctl mask systemd-journald.service
+systemctl disable systemd-udevd.service
+systemctl disable systemd-udevd-control.socket
+systemctl disable systemd-udevd-kernel.socket
+systemctl disable systemd-random-seed.service
+systemctl disable modprobe@drm.service
+systemctl disable modprobe@fuse.service
+systemctl disable modprobe@configfs.service
+systemctl disable console-setup.service
+systemctl disable keyboard-setup.service
+systemctl set-default multi-user.target
+systemctl disable systemd-timesyncd.service
+systemctl disable systemd-resolved.service
+
+# oto login talimatları (tavsiye edilmiyor!)
+mkdir -p /etc/systemd/system/serial-getty@ttyS0.service.d
+
+cat > /etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear ttyS0 115200,38400,9600 vt102
+EOF
+
+systemctl daemon-reexec
+systemctl restart serial-getty@ttyS0
+```
+
+#### Checkpoint kullanımı
+##### checkpoint alma (test edildi):
+checkpoint alan araç:
+terminalden çağrılacak
+bu yüzden derlenip sonradan mount ile yüklenmesi gerekiyor.
+
+```c
+#include <stdint.h>
+#include <stdio.h>
+
+#include "gem5/m5ops.h" // header dosyan m5_* fonksiyonları için
+
+int main() {
+    // Her şey boot olduktan sonra terminalden çalıştır
+    printf("Checkpoint alınacak...\n");
+    m5_checkpoint(0, 0);  // hemen checkpoint
+    printf("Checkpoint alındı.\n");
+    return 0;
+}
+```
+
+derleme için:
+```bash
+riscv64-linux-gnu-gcc \
+  -static \
+  -O2 \
+  -I../include \
+  ../util/m5/src/abi/riscv/m5op.S \
+  checkpointer.c \
+  -o checkpointer
+```
+
+mount ile ekleme
+```bash
+sudo mount ubuntu-riscv.img /mnt/ubuntu-riscv
+sudo cp ../github_repos/gem5-test-1/boot-tests/checkpointer /mnt/ubuntu-riscv/home/checkpointer
+sudo chmod +x /mnt/ubuntu-riscv/home/checkpointer
+sudo umount /mnt/ubuntu-riscv
+cp --sparse=never ubuntu-riscv.img ubuntu-riscv.raw.img
+```
+
+##### checkpoint'ten başlatma:
+N: kaçıncı checkpoint olduğu. checkpointler m5out içinde tutulur.
+"cpt.5454545" gibi gözükse de kaçıncı sırada olduğuna bakmak gerekiyor.
+Eğer en başta "cpt.%" varsa bunu saymamalısın.
+
+gem5 checkpoint'ten başlama komutu.
+```bash
+./build/RISCV/gem5.opt \
+  ./configs/example/riscv/fs_linux.py \
+  --caches --l1i_size=16kB --l1d_size=16kB \
+  --l2cache --l2_size=256kB \
+  --mem-type=DDR4_2400_8x8 \
+  --mem-size=10GB \
+  --restore-with-cpu=O3CPU \
+  --checkpoint-dir=m5out \
+  -r <N> \
+  --kernel=./boot-tests/bootloader-vmlinux-5.10 \
+  --disk-image=./boot-tests/ubuntu-riscv-min.raw.img \
+  --command-line="console=ttyS0 \
+    root=/dev/vda ro \
+    init=/bin/bash"
 ```
 
 ## commit işlemleri
