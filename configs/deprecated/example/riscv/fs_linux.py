@@ -352,6 +352,9 @@ if not args.bare_metal:
         system.workload.command_line = args.command_line
     else:
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 847fa429be (tests: linux boot on risc-v core)
         kernel_cmd = ["console=ttyS0", "root=/dev/vda", "ro"]
         # kernel_cmd = [
         #     "console=ttyS0",
@@ -359,6 +362,7 @@ if not args.bare_metal:
         #     "rw",
         #     "init=/test/linux-init-rutine.sh",
         # ]
+<<<<<<< HEAD
 =======
         # kernel_cmd = ["console=ttyS0", "root=/dev/vda", "ro"]
         kernel_cmd = [
@@ -368,6 +372,8 @@ if not args.bare_metal:
             "init=/test/linux-init-rutine.sh",
         ]
 >>>>>>> d526b2f8a8 (tests: linux boot ve test  kodu çalışıtırldı.)
+=======
+>>>>>>> 847fa429be (tests: linux boot on risc-v core)
         system.workload.command_line = " ".join(kernel_cmd)
 
     # DTB filename (auto-generate if not specified)
