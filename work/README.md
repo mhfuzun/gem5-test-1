@@ -1,7 +1,7 @@
 # Gem5 notları
 notlar.
 
-# gem5 + Docker + VS Code (Cihazdan Bağımsız Geliştirme)
+## gem5 + Docker + VS Code (Cihazdan Bağımsız Geliştirme)
 
 Bu doküman, gem5 geliştirme ortamının Docker kullanılarak
 tüm cihazlarda **aynı şekilde** çalıştırılmasını açıklar.
@@ -399,7 +399,7 @@ cp --sparse=never ubuntu-riscv.img ubuntu-riscv.raw.img
     systemd.unit=multi-user.target \
     quiet"
 
-# systemd olmadan
+# systemd olmadan, ucanlinux
 ./build/RISCV/gem5.opt \
   ./configs/example/riscv/fs_linux.py \
   --caches --l1i_size=16kB --l1d_size=16kB \
@@ -412,6 +412,20 @@ cp --sparse=never ubuntu-riscv.img ubuntu-riscv.raw.img
   --command-line="console=ttyS0 \
     root=/dev/vda ro \
     init=/bin/bash"
+
+# systemd ile
+./build/RISCV/gem5.opt \
+  ./configs/example/riscv/fs_linux.py \
+  --caches --l1i_size=16kB --l1d_size=16kB \
+  --l2cache --l2_size=256kB \
+  --mem-type=DDR4_2400_8x8 \
+  --mem-size=10GB \
+  --cpu-type=AtomicSimpleCPU \
+  --kernel=./boot-tests/bootloader-vmlinux-5.10 \
+  --disk-image=./boot-tests/ubuntu-riscv-min.raw.img \
+  --command-line="console=ttyS0 \
+    root=/dev/vda ro \
+    init=/sbin/init"
 ```
 
 ##### Optimizasyon detayları (test edildi)
@@ -457,6 +471,8 @@ apt purge -y \
   locales \
   ubuntu-standard
 
+apt install -y psmisc lsof procps
+
 # Locale’leri kapat
 rm -rf /usr/share/locale/*
 rm -rf /usr/lib/locale/*
@@ -501,7 +517,7 @@ bu yüzden derlenip sonradan mount ile yüklenmesi gerekiyor.
 #include <stdint.h>
 #include <stdio.h>
 
-#include "gem5/m5ops.h" // header dosyan m5_* fonksiyonları için
+#include "gem5/m5ops.h"
 
 int main() {
     // Her şey boot olduktan sonra terminalden çalıştır
@@ -552,7 +568,7 @@ gem5 checkpoint'ten başlama komutu.
   --disk-image=./boot-tests/ubuntu-riscv-min.raw.img \
   --command-line="console=ttyS0 \
     root=/dev/vda ro \
-    init=/bin/bash"
+    init=/sbin/init"
 ```
 
 ## commit işlemleri
@@ -561,4 +577,39 @@ git add .     # değişiklikleri güncelle
 git status    # kontrol et
 pre-commit run --all-files
 git commit -m "<msg>" # message formatına uyulmalı
+```
+
+## Parsec ile ilgili komutlar
+```bash
+# repo
+git clone https://github.com/cirosantilli/parsec-benchmark
+
+# img içine kopyala
+cp parsec /mnt/ubuntu/data/parsec
+
+sudo chroot /mnt/ubuntu
+
+sudo apt update
+sudo apt install -y build-essential \
+  gcc \
+  g++ \
+  make \
+  m4 \
+  perl \
+  python3 \
+  autoconf \
+  automake \
+  libtool \
+  lib1g-dev
+
+./configure
+source env.sh
+
+# build
+./bin/parsecmgmt -a build -p blackscholes -c gcc
+
+# run
+source env.sh
+./bin/parsecmgmt -a run -p blackscholes -i simsmall
+./bin/parsecmgmt -a run -p blackscholes -i test
 ```
