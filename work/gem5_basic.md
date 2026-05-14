@@ -1,6 +1,7 @@
 # Gem5 Basic
 
 ## SE modu
+```bash
 $GEM5PATH/build/RISCV/gem5.opt \
   $GEM5PATH/configs/deprecated/example/se.py \
   --cmd=$GEM5PATH/work/benchs/hello_world/hello \
@@ -9,6 +10,7 @@ $GEM5PATH/build/RISCV/gem5.opt \
   --l2cache --l2_size=256kB \
   --mem-type=DDR4_2400_8x8 \
   --mem-size=1GB
+```
 
 ## Konata Kullanımı
 ```bash
@@ -18,7 +20,7 @@ $GEM5PATH/build/RISCV/gem5.opt \
   --debug-start=0 \
   --debug-file=trace.out \
   $GEM5PATH/configs/deprecated/example/se.py \
-  --cmd=$GEM5PATH/work/benchs/hello_world/hello \
+  --cmd=$GEM5PATH/test/konata_test/hello_world/hello \
   --cpu-type=O3CPU \
   --caches --l1i_size=16kB --l1d_size=16kB \
   --l2cache --l2_size=256kB \

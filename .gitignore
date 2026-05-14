@@ -55,3 +55,10 @@ disk-image/parsec-benchmark/
 disk-image/packer_cache
 gem5
 linux-stable/
+
+.codex
+m5_term.log
+m5_term_coremarkDone.log
+src/cpu/pred/myTagePred/include/json.hpp
+m5out_*/
+old/

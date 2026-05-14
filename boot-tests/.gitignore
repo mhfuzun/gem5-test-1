@@ -1,6 +1,4 @@
 bbl
 bootloader-vmlinux-5.10
-riscv-disk.ismg
-coremark
-checkpointer
-testbench
+*.img
+/tools

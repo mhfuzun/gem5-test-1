@@ -1,5 +1,6 @@
 make -C coremark \
-  compile \
+  clean compile \
   PORT_DIR=posix \
   CC=riscv64-linux-gnu-gcc \
-  XCFLAGS="-O2 -static -march=rv64gc -mabi=lp64d -DCORE_DEBUG=1"
+  ITERATIONS=500 \
+  XCFLAGS="-O2 -static -march=rv64gc -mabi=lp64d -DCORE_DEBUG=0"

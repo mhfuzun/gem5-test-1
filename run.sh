@@ -1,0 +1,52 @@
+build/RISCV/gem5.opt -d m5out_t3_restore_mytage12_20000 \
+  configs/example/riscv/fs_linux_detailed_o3.py \
+  --kernel ./boot-tests/bootloader-vmlinux-5.10 \
+  --disk-image ./boot-tests/ubuntu-riscv.raw.img \
+  --command-line="console=ttyS0 root=/dev/vda1 ro init=/sbin/init" \
+  --cpu-type=RiscvO3CPU \
+  --restore-with-cpu=AtomicSimpleCPU \
+  --checkpoint-dir=m5out_t3 \
+  -r $CHECKPOINT \
+  --cpu-clock 2GHz \
+  --sys-clock 1GHz \
+  --mem-type DDR4_2400_8x8 \
+  --mem-size 20GB \
+  --mem-channels 2 \
+  --l1i_size 64KiB \
+  --l1d_size 64KiB \
+  --l2_size 2MiB \
+  --fetch-width 8 \
+  --decode-width 8 \
+  --rename-width 8 \
+  --dispatch-width 8 \
+  --issue-width 8 \
+  --commit-width 8 \
+  --num-rob-entries 256 \
+  --num-iq-entries 128 \
+  --lq-entries 64 \
+  --sq-entries 64 \
+  --bp-type MyTAGE \
+  --bp-inst-shift-amt 2 \
+  --param 'system.switch_cpus[0].branchPred.bimodalDepth = 4096' \
+  --param 'system.switch_cpus[0].branchPred.ghistoryLength = 2000' \
+  --param 'system.switch_cpus[0].branchPred.pchistoryLength = 32' \
+  --param 'system.switch_cpus[0].branchPred.compCount = 12' \
+  --param 'system.switch_cpus[0].branchPred.pcHashStartForIdx = 6' \
+  --param 'system.switch_cpus[0].branchPred.pcHashWidthForIdx = 12' \
+  --param 'system.switch_cpus[0].branchPred.pcHashStartForTag = 2' \
+  --param 'system.switch_cpus[0].branchPred.pcHashWidthForTag = 12' \
+  --param 'system.switch_cpus[0].branchPred.allocateRandomPlacement = True' \
+  --param 'system.switch_cpus[0].branchPred.allocateLongerThanProvider = True' \
+  --param 'system.switch_cpus[0].branchPred.periodicReset = False' \
+  --param 'system.switch_cpus[0].branchPred.periodicResetBranchPeriod = 256000' \
+  --param 'system.switch_cpus[0].branchPred.useLfsr = True' \
+  --param 'system.switch_cpus[0].branchPred.lfsrWidth = 8' \
+  --param 'system.switch_cpus[0].branchPred.lfsrSeed = 44257' \
+  --param 'system.switch_cpus[0].branchPred.lfsrMispredictionUpdate = True' \
+  --param 'system.switch_cpus[0].branchPred.tableDepth = [2048,2048,2048,2048,2048,2048,2048,2048,2048,2048,2048,2048]' \
+  --param 'system.switch_cpus[0].branchPred.tableUsefulWidth = [2,2,2,2,2,2,2,2,2,2,2,2]' \
+  --param 'system.switch_cpus[0].branchPred.tableCtrWidth = [3,3,3,3,3,3,3,3,3,3,3,3]' \
+  --param 'system.switch_cpus[0].branchPred.tableTagWidth = [7,7,8,9,9,10,11,11,12,13,14,15]' \
+  --param 'system.switch_cpus[0].branchPred.tableHistoryWidth = [5,9,15,25,42,70,116,193,321,535,891,1484]' \
+  --param 'system.switch_cpus[0].branchPred.tablePcHistoryStart = [0,0,0,0,0,0,0,0,0,0,0,0]' \
+  --param 'system.switch_cpus[0].branchPred.tablePcHistoryWidth = [3,3,3,5,5,5,8,8,8,16,16,16]'

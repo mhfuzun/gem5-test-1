@@ -79,6 +79,7 @@ cat > /etc/fstab <<EOF
 tmpfs  /tmp      tmpfs rw,nosuid,nodev,size=64M   0 0
 tmpfs  /run      tmpfs rw,nosuid,nodev,size=32M   0 0
 tmpfs  /var/log  tmpfs rw,nosuid,nodev,size=32M   0 0
+tmpfs  /var/tmp  tmpfs rw,nosuid,nodev,size=64M   0 0
 EOF
 
 # User RW alanı – home

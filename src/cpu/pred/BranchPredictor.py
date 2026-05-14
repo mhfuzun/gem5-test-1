@@ -334,6 +334,64 @@ class TAGE(BranchPredictor):
     tage = Param.TAGEBase(TAGEBase(), "Tage object")
 
 
+class MyTAGE(BranchPredictor):
+    type = "MyTAGE"
+    cxx_class = "gem5::branch_prediction::MyTAGE"
+    cxx_header = "cpu/pred/my_tage.hh"
+
+    # Backend/global settings
+    bimodalDepth = Param.Unsigned(1024, "Bimodal table depth")
+    ghistoryLength = Param.Unsigned(128, "Global history length")
+    pchistoryLength = Param.Unsigned(32, "Path history length")
+    compCount = Param.Unsigned(4, "Number of tagged components")
+
+    # PC hash settings
+    pcHashStartForIdx = Param.Unsigned(2, "PC hash start bit for index")
+    pcHashWidthForIdx = Param.Unsigned(10, "PC hash width for index")
+    pcHashStartForTag = Param.Unsigned(10, "PC hash start bit for tag")
+    pcHashWidthForTag = Param.Unsigned(12, "PC hash width for tag")
+
+    # Allocation/reset/random settings
+    allocateRandomPlacement = Param.Bool(
+        True, "Use random placement for allocation"
+    )
+    allocateLongerThanProvider = Param.Bool(
+        True, "Allocate only in tables longer than provider"
+    )
+    periodicReset = Param.Bool(False, "Enable periodic useful-bit reset")
+    periodicResetBranchPeriod = Param.Unsigned(
+        1 << 18, "Reset period in number of branches"
+    )
+
+    useLfsr = Param.Bool(False, "Use LFSR instead of rand()")
+    lfsrWidth = Param.Unsigned(16, "LFSR width")
+    lfsrSeed = Param.Unsigned(0xACE1, "Seed used for LFSR or rand()")
+    lfsrMispredictionUpdate = Param.Bool(
+        True, "Update LFSR state on misprediction"
+    )
+
+    # Per-table vectors (size must match compCount)
+    tableDepth = VectorParam.Unsigned(
+        [1024, 1024, 1024, 1024], "Per-table depth"
+    )
+    tableUsefulWidth = VectorParam.Unsigned(
+        [2, 2, 2, 2], "Per-table useful counter width"
+    )
+    tableCtrWidth = VectorParam.Unsigned(
+        [3, 3, 3, 3], "Per-table prediction counter width"
+    )
+    tableTagWidth = VectorParam.Unsigned([8, 8, 9, 9], "Per-table tag width")
+    tableHistoryWidth = VectorParam.Unsigned(
+        [5, 15, 44, 130], "Per-table history width"
+    )
+    tablePcHistoryStart = VectorParam.Unsigned(
+        [0, 0, 0, 0], "Per-table path-history start index"
+    )
+    tablePcHistoryWidth = VectorParam.Unsigned(
+        [0, 0, 0, 0], "Per-table path-history width"
+    )
+
+
 class LTAGE_TAGE(TAGEBase):
     nHistoryTables = 12
     minHist = 4

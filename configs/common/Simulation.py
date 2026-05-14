@@ -521,6 +521,8 @@ def run(options, root, testsys, cpu_class):
         ]
 
         for i in range(np):
+            if options.checkpoint_restore != None:
+                testsys.cpu[i].max_insts_any_thread = 1
             if options.fast_forward:
                 testsys.cpu[i].max_insts_any_thread = int(options.fast_forward)
             switch_cpus[i].system = testsys
@@ -544,6 +546,10 @@ def run(options, root, testsys, cpu_class):
                 switch_cpus[i].branchPred.indirectBranchPred = (
                     IndirectBPClass()
                 )
+            if hasattr(options, "configure_switch_cpu") and (
+                options.configure_switch_cpu is not None
+            ):
+                options.configure_switch_cpu(switch_cpus[i], i)
             switch_cpus[i].createThreads()
 
         # If elastic tracing is enabled attach the elastic trace probe
@@ -736,6 +742,12 @@ def run(options, root, testsys, cpu_class):
 
     if options.standard_switch or cpu_class:
         if options.standard_switch:
+            print(
+                "Switch at instruction count:%s"
+                % str(testsys.cpu[0].max_insts_any_thread)
+            )
+            exit_event = m5.simulate()
+        elif cpu_class and options.checkpoint_restore != None:
             print(
                 "Switch at instruction count:%s"
                 % str(testsys.cpu[0].max_insts_any_thread)

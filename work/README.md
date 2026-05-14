@@ -1,5 +1,5 @@
+
 # Gem5 notları
-notlar.
 
 ## gem5 + Docker + VS Code (Cihazdan Bağımsız Geliştirme)
 
@@ -36,7 +36,6 @@ sudo apt install libcapstone-dev
 ## Gereksinimler (Her Cihazda)
 
 - Git
-- Docker Desktop
 - Visual Studio Code
 - VS Code Extensions:
   - **Docker**
@@ -54,40 +53,6 @@ gem5/
 ├── src/
 ├── README.md
 ---
-```
-
-## Dockerfile (Ubuntu + gem5 build ortamı)
-
-`.devcontainer/Dockerfile`
-
-```dockerfile
-FROM ubuntu:22.04
-
-RUN apt update && apt install -y \
-    build-essential \
-    scons \
-    python3 \
-    python3-pip \
-    git \
-    gcc-riscv64-linux-gnu \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /work
-```
-
-## devcontainer.json
-.devcontainer/devcontainer.json
-```JSON
-{
-  "name": "gem5-dev",
-  "build": {
-    "dockerfile": "Dockerfile"
-  },
-  "workspaceFolder": "/work",
-  "extensions": [
-    "ms-azuretools.vscode-docker"
-  ]
-}
 ```
 
 ## Kullanım Adımları (Yeni Bir Cihazda)
@@ -424,7 +389,7 @@ cp --sparse=never ubuntu-riscv.img ubuntu-riscv.raw.img
   --kernel=./boot-tests/bootloader-vmlinux-5.10 \
   --disk-image=./boot-tests/ubuntu-riscv-min.raw.img \
   --command-line="console=ttyS0 \
-    root=/dev/vda ro \
+    root=/dev/vda1 ro \
     init=/sbin/init"
 ```
 
@@ -563,11 +528,11 @@ gem5 checkpoint'ten başlama komutu.
   --mem-size=10GB \
   --restore-with-cpu=O3CPU \
   --checkpoint-dir=m5out \
-  -r <N> \
+  -r $CHECKPOINT \
   --kernel=./boot-tests/bootloader-vmlinux-5.10 \
   --disk-image=./boot-tests/ubuntu-riscv-min.raw.img \
   --command-line="console=ttyS0 \
-    root=/dev/vda ro \
+    root=/dev/vda1 ro \
     init=/sbin/init"
 ```
 
