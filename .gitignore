@@ -62,3 +62,4 @@ m5_term_coremarkDone.log
 src/cpu/pred/myTagePred/include/json.hpp
 m5out_*/
 old/
+README_log.md
