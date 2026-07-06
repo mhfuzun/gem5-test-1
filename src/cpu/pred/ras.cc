@@ -135,6 +135,8 @@ ReturnAddrStack::ReturnAddrStack(const Params &p)
     : SimObject(p),
       numEntries(p.numEntries),
       numThreads(p.numThreads),
+      overflowRepair(p.overflowRepair),
+      resetOnUnrecoverable(p.resetOnUnrecoverable),
       stats(this)
 {
     DPRINTF(RAS, "Create RAS stacks.\n");
@@ -172,6 +174,10 @@ ReturnAddrStack::push(ThreadID tid, const PCStateBase &pc,
         makeRASHistory(ras_history);
     }
     RASHistory *history = static_cast<RASHistory*>(ras_history);
+    stats.pushRequests++;
+    if (addrStacks[tid].full()) {
+        stats.pushOverwrites++;
+    }
     stats.pushes++;
     history->pushed = true;
 
@@ -193,6 +199,10 @@ ReturnAddrStack::pop(ThreadID tid, void * &ras_history)
         makeRASHistory(ras_history);
     }
     RASHistory *history = static_cast<RASHistory*>(ras_history);
+    stats.popRequests++;
+    if (addrStacks[tid].empty()) {
+        stats.popEmpties++;
+    }
     stats.pops++;
 
     history->poped = true;
@@ -200,6 +210,9 @@ ReturnAddrStack::pop(ThreadID tid, void * &ras_history)
 
 
     set(history->ras_entry, addrStacks[tid].top());
+    if (history->ras_entry == nullptr) {
+        stats.popNullTargets++;
+    }
     // Pop the top of stack
     addrStacks[tid].pop();
 
@@ -225,6 +238,7 @@ ReturnAddrStack::squash(ThreadID tid, void * &ras_history)
     RASHistory *history = static_cast<RASHistory*>(ras_history);
 
     if (history->pushed) {
+        stats.squashUndoPushes++;
         stats.pops++;
         addrStacks[tid].pop();
 
@@ -234,6 +248,7 @@ ReturnAddrStack::squash(ThreadID tid, void * &ras_history)
     }
 
     if (history->poped) {
+        stats.squashRestorePops++;
         stats.pushes++;
         addrStacks[tid].restore(history->tos, history->ras_entry.get());
         DPRINTF(RAS, "RAS::%s Incorrect pop. Restore to: RAS[%i]:%#x. "
@@ -265,6 +280,7 @@ ReturnAddrStack::commit(ThreadID tid, bool misp,
 
 
     if (ras_history == nullptr) {
+        stats.committedNullHistories++;
         /**
          * The only case where we could have no history at this point is
          * for a conditional call that is not taken.
@@ -286,7 +302,12 @@ ReturnAddrStack::commit(ThreadID tid, bool misp,
     /* Handle all other commited returns and calls */
     RASHistory *history = static_cast<RASHistory*>(ras_history);
 
+    if (history->pushed) {
+        stats.committedCalls++;
+    }
+
     if (history->poped) {
+        stats.committedReturns++;
         stats.used++;
         if (misp) {
             stats.incorrect++;
@@ -321,7 +342,28 @@ ReturnAddrStack::ReturnAddrStackStats::ReturnAddrStackStats(
                "prediction is correct"),
       ADD_STAT(incorrect, statistics::units::Count::get(),
                "Number of times the RAS is the provider and the "
-               "prediction is wrong")
+               "prediction is wrong"),
+      ADD_STAT(pushRequests, statistics::units::Count::get(),
+               "Number of frontend/correction push requests sent to RAS"),
+      ADD_STAT(popRequests, statistics::units::Count::get(),
+               "Number of frontend/correction pop requests sent to RAS"),
+      ADD_STAT(pushOverwrites, statistics::units::Count::get(),
+               "Number of pushes that overwrote a full default RAS"),
+      ADD_STAT(popEmpties, statistics::units::Count::get(),
+               "Number of default RAS pops
+                    requested while usedEntries was zero"),
+      ADD_STAT(popNullTargets, statistics::units::Count::get(),
+               "Number of default RAS pops that returned a null target"),
+      ADD_STAT(squashUndoPushes, statistics::units::Count::get(),
+               "Number of squashes that undid a speculative RAS push"),
+      ADD_STAT(squashRestorePops, statistics::units::Count::get(),
+               "Number of squashes that restored a speculative RAS pop"),
+      ADD_STAT(committedCalls, statistics::units::Count::get(),
+               "Number of committed calls with RAS history"),
+      ADD_STAT(committedReturns, statistics::units::Count::get(),
+               "Number of committed returns with RAS pop history"),
+      ADD_STAT(committedNullHistories, statistics::units::Count::get(),
+               "Number of committed call/return branches without RAS history")
 {
 }
 

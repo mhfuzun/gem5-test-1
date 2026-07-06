@@ -145,7 +145,7 @@ class ReturnAddrStack : public SimObject
     // ReturnAddrStack(BPredUnit &_parent, const RASParams);
     ReturnAddrStack(const Params &p);
 
-    void reset();
+    virtual void reset();
 
     /**
      * Pushes an address onto the RAS.
@@ -153,7 +153,11 @@ class ReturnAddrStack : public SimObject
      * @param ras_history Pointer that will be set to an object that
      * has the return address state associated when the address was pushed.
      */
-    void push(ThreadID tid, const PCStateBase &pc, void * &ras_history);
+    virtual void push(
+      ThreadID tid,
+      const PCStateBase &pc,
+      void * &ras_history
+    );
 
     /**
      * Pops the top address from the RAS.
@@ -161,14 +165,14 @@ class ReturnAddrStack : public SimObject
      * has the return address state associated when an address was poped.
      * @return The address that got poped from the stack.
      *  */
-    const PCStateBase* pop(ThreadID tid, void * &ras_history);
+    virtual const PCStateBase* pop(ThreadID tid, void * &ras_history);
 
     /**
      * The branch (call/return) got squashed.
      * Restores the state of the RAS and delete history
      *  @param res_history The pointer to the history object.
      */
-    void squash(ThreadID tid, void * &ras_history);
+    virtual void squash(ThreadID tid, void * &ras_history);
 
     /**
      * A branch got finally got finally commited.
@@ -176,7 +180,7 @@ class ReturnAddrStack : public SimObject
      * @param brType The type of the branch.
      * @param ras_history The pointer to the history object.
      */
-    void commit(ThreadID tid, bool misp,
+    virtual void commit(ThreadID tid, bool misp,
                 const BranchType brType, void * &ras_history);
 
   private:
@@ -205,6 +209,9 @@ class ReturnAddrStack : public SimObject
     unsigned numEntries;
     /** The number of threads */
     unsigned numThreads;
+    /** Optional policy knobs shared with custom RAS models. */
+    bool overflowRepair;
+    bool resetOnUnrecoverable;
 
     struct ReturnAddrStackStats : public statistics::Group
     {
@@ -215,6 +222,16 @@ class ReturnAddrStack : public SimObject
         statistics::Scalar used;
         statistics::Scalar correct;
         statistics::Scalar incorrect;
+        statistics::Scalar pushRequests;
+        statistics::Scalar popRequests;
+        statistics::Scalar pushOverwrites;
+        statistics::Scalar popEmpties;
+        statistics::Scalar popNullTargets;
+        statistics::Scalar squashUndoPushes;
+        statistics::Scalar squashRestorePops;
+        statistics::Scalar committedCalls;
+        statistics::Scalar committedReturns;
+        statistics::Scalar committedNullHistories;
     } stats;
 };
 

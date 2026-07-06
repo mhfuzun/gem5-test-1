@@ -355,10 +355,23 @@ def configure_branch_predictor(core, args):
         if btb_rp is not None:
             branch_pred.btb.btbReplPolicy = btb_rp
 
-    if args.disable_ras:
+    if args.disable_ras or args.ras == "none":
         branch_pred.ras = NULL
-    elif hasattr(branch_pred, "ras") and branch_pred.ras not in (None, NULL):
+    elif hasattr(branch_pred, "ras"):
+        if args.ras == "myRas":
+            branch_pred.ras = MyRAS()
+        elif branch_pred.ras in (None, NULL):
+            branch_pred.ras = ReturnAddrStack()
+
         branch_pred.ras.numEntries = args.ras_entries
+        if hasattr(branch_pred.ras, "branchEntries"):
+            branch_pred.ras.branchEntries = args.ras_branch_entries
+        if hasattr(branch_pred.ras, "overflowRepair"):
+            branch_pred.ras.overflowRepair = args.ras_overflow_repair == "on"
+        if hasattr(branch_pred.ras, "resetOnUnrecoverable"):
+            branch_pred.ras.resetOnUnrecoverable = (
+                args.ras_reset_on_unrecoverable == "on"
+            )
 
     if args.disable_indirect_bp:
         branch_pred.indirectBranchPred = NULL
@@ -1000,10 +1013,40 @@ def add_detailed_predictor_options(parser):
     )
 
     parser.add_argument(
+        "--ras",
+        choices=["default", "myRas", "none"],
+        default="default",
+        help="Return-address stack implementation to use.",
+    )
+    parser.add_argument(
         "--ras-entries",
         type=int,
         default=16,
         help="Return-address stack depth.",
+    )
+    parser.add_argument(
+        "--ras-branch-entries",
+        type=int,
+        default=64,
+        help="Speculative branch state entries for --ras=myRas.",
+    )
+    parser.add_argument(
+        "--ras-overflow-repair",
+        choices=["off", "on"],
+        default="off",
+        help=(
+            "Track MyRAS push overflows with a debt counter and consume "
+            "matching empty pops instead of treating them as real underflows."
+        ),
+    )
+    parser.add_argument(
+        "--ras-reset-on-unrecoverable",
+        choices=["off", "on"],
+        default="off",
+        help=(
+            "Reset the RAS when speculative state cannot be snapshotted or "
+            "recovered."
+        ),
     )
     parser.add_argument(
         "--disable-ras",

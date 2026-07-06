@@ -29,19 +29,22 @@ build/RISCV/gem5.opt \
   --num-iq-entries 128 \
   --lq-entries 64 \
   --sq-entries 64 \
-  --bp-type MyTAGE
+  --bp-type MyTAGE \
+  --ras myRas \
+  --ras-entries 16 \
+  --ras-branch-entries 64
 ```
 
 ## Atomic ile checkpoint alma
 ```bash
-build/RISCV/gem5.opt -d m5out_t3 \
+build/RISCV/gem5.opt -d m5out_rasAtomic \
   configs/example/riscv/fs_linux_detailed_o3.py \
   --kernel ./boot-tests/bootloader-vmlinux-5.10 \
   --disk-image ./boot-tests/ubuntu-riscv.raw.img \
   --command-line="console=ttyS0 root=/dev/vda1 ro init=/sbin/init" \
   --cpu-type=AtomicSimpleCPU \
   --checkpoint-at-end \
-  --checkpoint-dir=m5out_t3 \
+  --checkpoint-dir=m5out_rasCheckpoint \
   --cpu-clock 2GHz \
   --sys-clock 1GHz \
   --mem-type DDR4_2400_8x8 \
@@ -183,14 +186,14 @@ bloklarini ekleyebilirsin:
 ```bash
 CHECKPOINT=1
 
-build/RISCV/gem5.opt -d m5out_t3_restore_mytage12 \
+build/RISCV/gem5.opt -d m5out_rasO3 \
   configs/example/riscv/fs_linux_detailed_o3.py \
   --kernel ./boot-tests/bootloader-vmlinux-5.10 \
   --disk-image ./boot-tests/ubuntu-riscv.raw.img \
   --command-line="console=ttyS0 root=/dev/vda1 ro init=/sbin/init" \
   --cpu-type=RiscvO3CPU \
   --restore-with-cpu=AtomicSimpleCPU \
-  --checkpoint-dir=m5out_t3 \
+  --checkpoint-dir=m5out_rasCheckpoint \
   -r $CHECKPOINT \
   --cpu-clock 2GHz \
   --sys-clock 1GHz \
@@ -234,7 +237,10 @@ build/RISCV/gem5.opt -d m5out_t3_restore_mytage12 \
   --param 'system.switch_cpus[0].branchPred.tableTagWidth = [7,7,8,9,9,10,11,11,12,13,14,15]' \
   --param 'system.switch_cpus[0].branchPred.tableHistoryWidth = [5,9,15,25,42,70,116,193,321,535,891,1484]' \
   --param 'system.switch_cpus[0].branchPred.tablePcHistoryStart = [0,0,0,0,0,0,0,0,0,0,0,0]' \
-  --param 'system.switch_cpus[0].branchPred.tablePcHistoryWidth = [3,3,3,5,5,5,8,8,8,16,16,16]'
+  --param 'system.switch_cpus[0].branchPred.tablePcHistoryWidth = [3,3,3,5,5,5,8,8,8,16,16,16]' \
+  --ras myRas \
+  --ras-entries 16 \
+  --ras-branch-entries 64
 ```
 
 Bu blok tam olarak senin daha once logladigin su yapıyı kurar:
@@ -259,3 +265,31 @@ table_bits ~= depth * (useful_width + ctr_width + tag_width)
 Bu nedenle yukaridaki ornekte table boyutlari yaklasik olarak 3 KiB ile 5 KiB
 arasinda degisir. Tam olarak "her tagged component 4 KiB olsun" istiyorsan
 `tag_width` ile birlikte `depth` de tablo bazinda yeniden ayarlanmalidir.
+
+## MyRAS Kullanimi
+
+Ozel RAS modelini acmak icin detayli O3 komutuna su secenekleri ekle:
+
+```bash
+--ras myRas \
+--ras-entries 16 \
+--ras-branch-entries 64 \
+--ras-overflow-repair off \
+--ras-reset-on-unrecoverable off
+```
+
+`--ras default` gem5'in standart `ReturnAddrStack` modelini kullanir.
+`--ras none` veya `--disable-ras` RAS'i kapatir.
+
+`myRas`, `ras.cc` icindeki klasik squash-restore modelinin yerine branch-state
+zinciri kullanan `MyRAS` SimObject'ini baglar. `--ras-entries` adres tablosu
+derinligini, `--ras-branch-entries` ise speculative branch state tablosu
+derinligini ayarlar.
+
+Performans denemeleri icin iki ek RAS politikasi vardir. `--ras-overflow-repair
+on`, dolu adres tablosu nedeniyle yazilamayan call adreslerini bir borc sayaci
+ile izler; sonraki bos pop durumlarinda bu borcu dusurur ve gercek underflow
+sayacini sisirmez. `--ras-reset-on-unrecoverable on`, snapshot/recover state'i
+kayboldugunda RAS'i temiz baslangic durumuna resetler. Iki secenek de varsayilan
+olarak `off` gelir; boylece eski `myRas` ve default RAS kosulari aynen tekrar
+uretilebilir.

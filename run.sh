@@ -1,11 +1,11 @@
-build/RISCV/gem5.opt -d m5out_t3_restore_mytage12_20000 \
+build/RISCV/gem5.opt -d m5out_rasO3_$TEST \
   configs/example/riscv/fs_linux_detailed_o3.py \
   --kernel ./boot-tests/bootloader-vmlinux-5.10 \
   --disk-image ./boot-tests/ubuntu-riscv.raw.img \
   --command-line="console=ttyS0 root=/dev/vda1 ro init=/sbin/init" \
   --cpu-type=RiscvO3CPU \
   --restore-with-cpu=AtomicSimpleCPU \
-  --checkpoint-dir=m5out_t3 \
+  --checkpoint-dir=m5out_rasCheckpoint \
   -r $CHECKPOINT \
   --cpu-clock 2GHz \
   --sys-clock 1GHz \
@@ -49,4 +49,7 @@ build/RISCV/gem5.opt -d m5out_t3_restore_mytage12_20000 \
   --param 'system.switch_cpus[0].branchPred.tableTagWidth = [7,7,8,9,9,10,11,11,12,13,14,15]' \
   --param 'system.switch_cpus[0].branchPred.tableHistoryWidth = [5,9,15,25,42,70,116,193,321,535,891,1484]' \
   --param 'system.switch_cpus[0].branchPred.tablePcHistoryStart = [0,0,0,0,0,0,0,0,0,0,0,0]' \
-  --param 'system.switch_cpus[0].branchPred.tablePcHistoryWidth = [3,3,3,5,5,5,8,8,8,16,16,16]'
+  --param 'system.switch_cpus[0].branchPred.tablePcHistoryWidth = [3,3,3,5,5,5,8,8,8,16,16,16]' \
+  --ras myRas \
+  --ras-entries $RAS_ADDR_ENTRY \
+  --ras-branch-entries $RAS_BRA_ENTRY

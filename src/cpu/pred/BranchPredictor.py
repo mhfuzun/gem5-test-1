@@ -75,6 +75,22 @@ class ReturnAddrStack(SimObject):
 
     numThreads = Param.Unsigned(Parent.numThreads, "Number of threads")
     numEntries = Param.Unsigned(16, "Number of RAS entries")
+    overflowRepair = Param.Bool(
+        False,
+        "Track dropped speculative pushes and consume matching underflows",
+    )
+    resetOnUnrecoverable = Param.Bool(
+        False,
+        "Reset the RAS state after unrecoverable speculative state loss",
+    )
+
+
+class MyRAS(ReturnAddrStack):
+    type = "MyRAS"
+    cxx_class = "gem5::branch_prediction::MyRAS"
+    cxx_header = "cpu/pred/my_ras.hh"
+
+    branchEntries = Param.Unsigned(64, "Speculative branch state entries")
 
 
 class BranchTargetBuffer(ClockedObject):
