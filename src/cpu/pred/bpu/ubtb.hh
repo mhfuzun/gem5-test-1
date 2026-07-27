@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
 #include "bpu_structs.hh"
+#include "plru.hh"
 
 class ubtb
 {
@@ -20,7 +22,8 @@ class ubtb
         ubtb_cfg cfg;
         std::vector<ubtb_entry_t> ubtb_entries;
         std::unordered_map<int, std::size_t> tag_index;
-        std::size_t next_replace = 0;
+        plru replacement;
+        std::vector<std::uint8_t> replacement_state;
 
         ubtb_entry_t* lookup(int pc);
         const ubtb_entry_t* lookup(int pc) const;

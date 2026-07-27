@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <iterator>
 
 #include "ubtb.hh"
 
@@ -25,6 +26,8 @@ ubtb::ubtb(ubtb_cfg cfg) {
     this->cfg = cfg;
 
     ubtb_entries.resize(std::max(0, cfg.way_count));
+    replacement.reset(ubtb_entries.size());
+    replacement_state = replacement.new_state();
     rebuild_index();
 }
 
@@ -40,7 +43,11 @@ ubtb_entry_t* ubtb::lookup(int pc) {
         return nullptr;
     }
 
-    ubtb_entry_t& entry = ubtb_entries[it->second];
+    const std::size_t idx = it->second;
+    ubtb_entry_t& entry = ubtb_entries[idx];
+    if (entry.valid && entry.tag == tag) {
+        replacement.touch(replacement_state, idx);
+    }
     return entry.valid && entry.tag == tag ? &entry : nullptr;
 }
 
@@ -86,8 +93,16 @@ ubtb::insert_or_update(int pc, const ubtb_entry_t& new_entry)
     if (it != tag_index.end()) {
         idx = it->second;
     } else {
-        idx = next_replace;
-        next_replace = (next_replace + 1) % ubtb_entries.size();
+        const auto invalid = std::find_if(
+            ubtb_entries.begin(), ubtb_entries.end(),
+            [](const ubtb_entry_t& entry) { return !entry.valid; });
+        if (invalid != ubtb_entries.end()) {
+            idx = static_cast<std::size_t>(
+                std::distance(ubtb_entries.begin(), invalid));
+            replacement.touch(replacement_state, idx);
+        } else {
+            idx = replacement.get_lru_and_touch(replacement_state);
+        }
     }
 
     if (ubtb_entries[idx].valid) {
@@ -98,6 +113,7 @@ ubtb::insert_or_update(int pc, const ubtb_entry_t& new_entry)
     ubtb_entries[idx].valid = true;
     ubtb_entries[idx].tag = tag;
     tag_index[tag] = idx;
+    replacement.touch(replacement_state, idx);
 }
 
 void

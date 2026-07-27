@@ -2,9 +2,40 @@
 
 #include <algorithm>
 
-cfi_tracer::cfi_tracer(int depth)
-    : depth(std::max(1, depth))
+cfi_tracer::cfi_tracer(int depth, int bank_count)
+    : depth(std::max(1, depth)),
+      bank_count(std::max(1, bank_count))
 {
+}
+
+int
+cfi_tracer::get_bank_2b_count() const
+{
+    return std::max(1, bpu_cfg::fetch_block_2b_count / bank_count);
+}
+
+int
+cfi_tracer::get_bank_slot(const bpu_sign_t& sign) const
+{
+    const int offset = std::max(0, sign.offset);
+    return std::min(bank_count - 1, offset / get_bank_2b_count());
+}
+
+int
+cfi_tracer::get_bank_pc(int fetch_block_addr, int bank_slot) const
+{
+    return fetch_block_addr + bank_slot * get_bank_2b_count() * 2;
+}
+
+bpu_sign_t
+cfi_tracer::make_btb_sign(const bpu_sign_t& fetch_block_sign) const
+{
+    bpu_sign_t btb_sign = fetch_block_sign;
+    const int bank_slot = get_bank_slot(fetch_block_sign);
+    btb_sign.offset =
+        std::max(0, fetch_block_sign.offset) -
+        bank_slot * get_bank_2b_count();
+    return btb_sign;
 }
 
 void
@@ -46,7 +77,8 @@ cfi_tracer::check(ThreadID tid, int fetch_block_addr,
         const bpu_sign_t& predicted = bpu_sign_vector[i];
         if (actual.offset != predicted.offset ||
             actual.type != predicted.type ||
-            actual.compressed != predicted.compressed) {
+            actual.compressed != predicted.compressed ||
+            actual.is_call != predicted.is_call) {
             mismatch_idx = i;
             break;
         }
@@ -96,13 +128,23 @@ cfi_tracer::lookup(ThreadID tid, int fetch_block_addr) const
 btb_entry_t
 cfi_tracer::make_btb_entry(ThreadID tid, int fetch_block_addr) const
 {
-    btb_entry_t btb_entry;
-    const cfi_tracer_entry_t* entry = lookup(tid, fetch_block_addr);
-    if (entry == nullptr || entry->cfi_points.empty()) {
-        return btb_entry;
+    const std::vector<btb_commit_update_t> updates =
+        make_btb_commit_updates(tid, fetch_block_addr);
+    if (updates.empty()) {
+        return {};
     }
 
-    btb_entry.valid = true;
+    return updates.front().entry;
+}
+
+std::vector<btb_commit_update_t>
+cfi_tracer::make_btb_commit_updates(ThreadID tid, int fetch_block_addr) const
+{
+    std::vector<btb_commit_update_t> updates;
+    const cfi_tracer_entry_t* entry = lookup(tid, fetch_block_addr);
+    if (entry == nullptr || entry->cfi_points.empty()) {
+        return updates;
+    }
 
     auto fill_record = [](btb_entry_record_t& record,
                           const cfi_point_t& cfi_point) {
@@ -113,12 +155,45 @@ cfi_tracer::make_btb_entry(ThreadID tid, int fetch_block_addr) const
         record.fallthrough_next_cfi_span_2b = cfi_point.next_cfi_span_2b;
     };
 
-    fill_record(btb_entry.e1, entry->cfi_points[0]);
-    if (entry->cfi_points.size() > 1) {
-        fill_record(btb_entry.e2, entry->cfi_points[1]);
+    std::vector<btb_entry_t> bank_entries(bank_count);
+    std::vector<bool> bank_touched(bank_count, false);
+
+    for (const cfi_point_t& cfi_point : entry->cfi_points) {
+        const int bank_slot = get_bank_slot(cfi_point.sign);
+        btb_entry_t& btb_entry = bank_entries[bank_slot];
+        cfi_point_t bank_point = cfi_point;
+        bank_point.sign = make_btb_sign(cfi_point.sign);
+
+        if (!btb_entry.e1.valid) {
+            fill_record(btb_entry.e1, bank_point);
+        } else if (!btb_entry.e2.valid) {
+            fill_record(btb_entry.e2, bank_point);
+        } else {
+            continue;
+        }
+
+        btb_entry.valid = true;
+        bank_touched[bank_slot] = true;
     }
 
-    return btb_entry;
+    for (int bank_slot = 0; bank_slot < bank_count; ++bank_slot) {
+        if (!bank_touched[bank_slot]) {
+            continue;
+        }
+
+        btb_commit_update_t update;
+        update.valid = true;
+        update.insert_entry = true;
+        update.pc = get_bank_pc(fetch_block_addr, bank_slot);
+        update.lookup_pc_valid = true;
+        update.lookup_pc = fetch_block_addr;
+        update.ubtb_pc_valid = true;
+        update.ubtb_pc = fetch_block_addr;
+        update.entry = bank_entries[bank_slot];
+        updates.push_back(update);
+    }
+
+    return updates;
 }
 
 void

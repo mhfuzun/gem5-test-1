@@ -35,6 +35,15 @@ tt_table::tt_table(tt_cfg cfg)
     const int banks = positive_count(cfg.bank_count);
     const int sets = positive_count(cfg.set_count);
 
+    replacement.reset(ways);
+    replacement_states.resize(banks);
+    for (auto& bank : replacement_states) {
+        bank.resize(sets);
+        for (auto& state : bank) {
+            state = replacement.new_state();
+        }
+    }
+
     tt.resize(ways);
     for (auto& way : tt) {
         way.resize(banks);
@@ -45,10 +54,18 @@ tt_table::tt_table(tt_cfg cfg)
 }
 
 int
+tt_table::get_bank_2b_count() const
+{
+    const int banks = positive_count(cfg.bank_count);
+    return std::max(1, bpu_cfg::fetch_block_2b_count / banks);
+}
+
+int
 tt_table::get_bank_index(int pc) const
 {
     const int banks = positive_count(cfg.bank_count);
-    return ((pc >> cfg.tag_pc_shift) % banks + banks) % banks;
+    const int bank_block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
+    return (bank_block % banks + banks) % banks;
 }
 
 int
@@ -56,7 +73,7 @@ tt_table::generate_index(int pc) const
 {
     const int sets = positive_count(cfg.set_count);
     const int banks = positive_count(cfg.bank_count);
-    int block = pc >> cfg.tag_pc_shift;
+    int block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
     block /= banks;
     return (block % sets + sets) % sets;
 }
@@ -64,11 +81,14 @@ tt_table::generate_index(int pc) const
 int
 tt_table::generate_tag(int pc) const
 {
-    return (pc >> cfg.tag_pc_shift) & mask_bits(cfg.tag_width);
+    const int banks = positive_count(cfg.bank_count);
+    int block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
+    block /= banks;
+    return block & mask_bits(cfg.tag_width);
 }
 
 tt_bank_response_t
-tt_table::lookup(int pc) const
+tt_table::lookup(int pc)
 {
     tt_bank_response_t response;
     response.banks.resize(positive_count(cfg.bank_count));
@@ -93,6 +113,8 @@ tt_table::lookup(int pc) const
 
             bank_response.hit = true;
             bank_response.target = entry.target;
+            replacement.touch(replacement_states[bank][set],
+                              static_cast<std::size_t>(way));
             break;
         }
     }
@@ -103,15 +125,62 @@ tt_table::lookup(int pc) const
 void
 tt_table::insert_or_update(int pc, int target)
 {
+    insert_or_update(pc, target, pc);
+}
+
+void
+tt_table::insert_or_update(int pc, int target, int tag_pc)
+{
     if (tt.empty()) {
         return;
     }
 
     const int bank = get_bank_index(pc);
     const int idx = generate_index(pc);
-    tt_entry_t& entry = tt[0][bank][idx];
+    const int tag = generate_tag(tag_pc);
 
-    entry.valid = true;
-    entry.tag = generate_tag(pc);
-    entry.target = target;
+    tt_entry_t* entry = nullptr;
+    std::size_t entry_way = 0;
+    for (int way = 0; way < positive_count(cfg.way_count); ++way) {
+        tt_entry_t& candidate = tt[way][bank][idx];
+        if (candidate.valid && candidate.tag == tag) {
+            entry = &candidate;
+            entry_way = static_cast<std::size_t>(way);
+            break;
+        }
+    }
+
+    if (entry == nullptr) {
+        for (int way = 0; way < positive_count(cfg.way_count); ++way) {
+            tt_entry_t& candidate = tt[way][bank][idx];
+            if (!candidate.valid) {
+                entry = &candidate;
+                entry_way = static_cast<std::size_t>(way);
+                break;
+            }
+        }
+    }
+
+    std::vector<std::uint8_t>& plru_state = replacement_states[bank][idx];
+    if (entry == nullptr) {
+        entry_way = replacement.get_lru_and_touch(plru_state);
+        entry = &tt[entry_way][bank][idx];
+    }
+
+    entry->valid = true;
+    entry->tag = tag;
+    entry->target = target;
+    replacement.touch(plru_state, entry_way);
+}
+
+void
+tt_table::commit(const tt_commit_update_t& update)
+{
+    if (!update.valid) {
+        return;
+    }
+
+    const int lookup_pc =
+        update.lookup_pc_valid ? update.lookup_pc : update.pc;
+    insert_or_update(update.pc, update.target, lookup_pc);
 }

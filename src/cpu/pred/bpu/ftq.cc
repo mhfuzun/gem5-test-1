@@ -19,15 +19,19 @@ ftq::add_entry(int base_addr, int fetch_span_2b)
     entry.valid = true;
     entry.base_addr = base_addr;
     entry.fetch_span_2b = fetch_span_2b;
+    entry.consumed_span_2b = 0;
 
     ftq_entries.push_back(entry);
+    retire_consumed_fronts();
     return &ftq_entries.back();
 }
 
 void
 ftq::add_fetch_span(ftq_entry_t& entry, int fetch_span_2b)
 {
-    entry.fetch_span_2b += fetch_span_2b;
+    entry.fetch_span_2b =
+        std::max(entry.fetch_span_2b, entry.consumed_span_2b) +
+        std::max(0, fetch_span_2b);
 }
 
 void
@@ -55,7 +59,8 @@ int
 ftq::get_fetch_span_2b() const
 {
     const ftq_entry_t* entry = front();
-    return entry == nullptr ? 0 : entry->fetch_span_2b;
+    return entry == nullptr ? 0 :
+        std::max(0, entry->fetch_span_2b - entry->consumed_span_2b);
 }
 
 void
@@ -75,10 +80,15 @@ ftq::consume(int two_byte_count)
     }
 
     ftq_entry_t& entry = ftq_entries.front();
-    entry.fetch_span_2b = std::max(0, entry.fetch_span_2b - two_byte_count);
+    const int remaining =
+        std::max(0, entry.fetch_span_2b - entry.consumed_span_2b);
+    const int consumed = std::min(remaining, two_byte_count);
+    entry.consumed_span_2b =
+        std::min(entry.fetch_span_2b, entry.consumed_span_2b + consumed);
 
-    if (entry.fetch_span_2b == 0 && ftq_entries.size() > 1) {
-        ftq_entries.pop_front();
+    if (entry.consumed_span_2b >= entry.fetch_span_2b &&
+        ftq_entries.size() > 1) {
+        retire_consumed_fronts();
     }
 }
 
@@ -123,6 +133,14 @@ ftq::back() const
 }
 
 bool
+ftq::ready() const
+{
+    const ftq_entry_t* entry = front();
+    return entry != nullptr && entry->valid &&
+        entry->fetch_span_2b > entry->consumed_span_2b;
+}
+
+bool
 ftq::empty() const
 {
     return ftq_entries.empty();
@@ -145,4 +163,14 @@ void
 ftq::clear()
 {
     ftq_entries.clear();
+}
+
+void
+ftq::retire_consumed_fronts()
+{
+    while (ftq_entries.size() > 1 &&
+           ftq_entries.front().consumed_span_2b >=
+           ftq_entries.front().fetch_span_2b) {
+        ftq_entries.pop_front();
+    }
 }

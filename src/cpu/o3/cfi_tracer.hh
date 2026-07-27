@@ -39,7 +39,7 @@ class cfi_tracer
             bpu_sign_t sign;
         };
 
-        explicit cfi_tracer(int depth = 64);
+        explicit cfi_tracer(int depth = 64, int bank_count = 1);
 
         /**
          * cfi_tracer içine ekleme yapar.
@@ -75,6 +75,8 @@ class cfi_tracer
         const cfi_tracer_entry_t* lookup(ThreadID tid, int fetch_block_addr)
             const;
         btb_entry_t make_btb_entry(ThreadID tid, int fetch_block_addr) const;
+        std::vector<btb_commit_update_t> make_btb_commit_updates(
+            ThreadID tid, int fetch_block_addr) const;
         void squash_after(ThreadID tid, InstSeqNum seq_num);
         void commit_until(ThreadID tid, InstSeqNum done_seq);
         void clear();
@@ -82,5 +84,11 @@ class cfi_tracer
 
     private:
         int depth;
+        int bank_count;
         std::vector<cfi_tracer_entry_t> cfi_tracer_entries;
+
+        int get_bank_2b_count() const;
+        int get_bank_slot(const bpu_sign_t& sign) const;
+        int get_bank_pc(int fetch_block_addr, int bank_slot) const;
+        bpu_sign_t make_btb_sign(const bpu_sign_t& fetch_block_sign) const;
 };

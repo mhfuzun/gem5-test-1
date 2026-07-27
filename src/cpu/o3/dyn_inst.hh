@@ -325,6 +325,9 @@ class DynInst : public ExecContext, public RefCounted
     /** Predicted PC state after this instruction. */
     std::unique_ptr<PCStateBase> predPC;
 
+    /** Speculative node produced by the experimental decoupled BPU. */
+    int decoupledBpuSpeculativeId = -1;
+
     /** The Macroop if one exists */
     const StaticInstPtr macroop;
 
@@ -524,6 +527,18 @@ class DynInst : public ExecContext, public RefCounted
     setPredTaken(bool predicted_taken)
     {
         instFlags[PredTaken] = predicted_taken;
+    }
+
+    int
+    getDecoupledBpuSpeculativeId() const
+    {
+        return decoupledBpuSpeculativeId;
+    }
+
+    void
+    setDecoupledBpuSpeculativeId(int speculative_id)
+    {
+        decoupledBpuSpeculativeId = speculative_id;
     }
 
     /** Returns whether the instruction mispredicted. */

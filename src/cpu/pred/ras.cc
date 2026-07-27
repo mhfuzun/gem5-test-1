@@ -350,8 +350,8 @@ ReturnAddrStack::ReturnAddrStackStats::ReturnAddrStackStats(
       ADD_STAT(pushOverwrites, statistics::units::Count::get(),
                "Number of pushes that overwrote a full default RAS"),
       ADD_STAT(popEmpties, statistics::units::Count::get(),
-               "Number of default RAS pops
-                    requested while usedEntries was zero"),
+               "Number of default RAS pops requested while usedEntries was "
+               "zero"),
       ADD_STAT(popNullTargets, statistics::units::Count::get(),
                "Number of default RAS pops that returned a null target"),
       ADD_STAT(squashUndoPushes, statistics::units::Count::get(),

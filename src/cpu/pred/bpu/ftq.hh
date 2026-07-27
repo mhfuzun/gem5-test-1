@@ -22,6 +22,7 @@ class ftq
         const ftq_entry_t* front() const;
         ftq_entry_t* back();
         const ftq_entry_t* back() const;
+        bool ready() const;
         bool empty() const;
         bool full() const;
         int size() const;
@@ -30,4 +31,6 @@ class ftq
     private:
         ftq_cfg cfg;
         std::deque<ftq_entry_t> ftq_entries;
+
+        void retire_consumed_fronts();
 };

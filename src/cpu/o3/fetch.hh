@@ -41,15 +41,21 @@
 #ifndef __CPU_O3_FETCH_HH__
 #define __CPU_O3_FETCH_HH__
 
+#include <deque>
+#include <memory>
+#include <vector>
+
 #include "arch/generic/decoder.hh"
 #include "arch/generic/mmu.hh"
 #include "base/random.hh"
 #include "base/statistics.hh"
+#include "cpu/o3/cfi_tracer.hh"
 #include "cpu/o3/comm.hh"
 #include "cpu/o3/dyn_inst_ptr.hh"
 #include "cpu/o3/limits.hh"
 #include "cpu/pc_event.hh"
 #include "cpu/pred/bpred_unit.hh"
+#include "cpu/pred/bpu/bpu.hh"
 #include "cpu/timebuf.hh"
 #include "cpu/translation.hh"
 #include "enums/SMTFetchPolicy.hh"
@@ -326,6 +332,53 @@ class Fetch
      * cycle. */
     FetchStatus updateFetchStatus();
 
+    enum DecoupledBpuRedirectType
+    {
+        DecoupledBpuDirectCond,
+        DecoupledBpuDirectUncond,
+        DecoupledBpuIndirect,
+        DecoupledBpuReturn,
+        DecoupledBpuOther
+    };
+
+    void tickDecoupledBPU(ThreadID tid);
+    bool decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr);
+    void recoverDecoupledBPU(ThreadID tid, const PCStateBase &new_pc,
+                             const DynInstPtr &squashInst,
+                             bool include_self);
+    void clearDecoupledBPUFetchPredictions(ThreadID tid);
+    void recordDecoupledBPUFetchPrediction(ThreadID tid,
+                                           const ftq_entry_t &entry,
+                                           int span_start_2b,
+                                           int span_count_2b);
+    struct DecoupledBpuFetchPredictionSegment;
+    const DecoupledBpuFetchPredictionSegment*
+        findDecoupledBPUFetchPrediction(ThreadID tid, Addr inst_addr) const;
+    bool applyDecoupledBPUPrediction(const DynInstPtr &inst,
+                                     PCStateBase &next_pc,
+                                     bool &predict_taken);
+    void stallDecoupledBPUForJalr(ThreadID tid, const DynInstPtr &inst);
+    bool decoupledBPUWaitingForJalr(ThreadID tid,
+                                    const DynInstPtr &inst) const;
+    void clearDecoupledBPUJalrStall(ThreadID tid);
+    void consumeDecoupledFTQCacheBlock(ThreadID tid, Addr fetch_addr);
+    bool checkDecoupledBPUPredecode(ThreadID tid, const DynInstPtr &inst,
+                                    PCStateBase &next_pc);
+    bpu_cycle_input_t makeDecoupledBPUInput(ThreadID tid, Addr base) const;
+    void sampleDecoupledBPUOutput(ThreadID tid,
+                                  const bpu_cycle_output_t &output);
+    void recordDecoupledBPUCommitInfo(ThreadID tid, const DynInstPtr &inst);
+    void updateDecoupledBPUMispredictCommitInfo(
+        ThreadID tid, const DynInstPtr &inst, bool branch_taken,
+        const PCStateBase &target);
+    void commitDecoupledBPU(ThreadID tid, InstSeqNum done_seq,
+                            bool retire_speculation = true);
+    void squashDecoupledBPUCommitInfo(ThreadID tid, InstSeqNum done_seq);
+    void countDecoupledBPURedirect(const DynInstPtr &inst,
+                                   bool from_decode);
+    DecoupledBpuRedirectType decoupledBPURedirectType(
+        const DynInstPtr &inst) const;
+
   public:
     /** Squashes a specific thread and resets the PC. Also tells the CPU to
      * remove any instructions that are not in the ROB. The source of this
@@ -414,6 +467,51 @@ class Fetch
 
     /** BPredUnit. */
     branch_prediction::BPredUnit *branchPred;
+
+    bool decoupledBPUEnabled;
+    bool decoupledBPUUseTAGE;
+    bool decoupledBPUUseRAS;
+    bool decoupledBPUUseITTAGE;
+    unsigned decoupledBPUBanks;
+    unsigned decoupledBPUFTQDepth;
+    unsigned decoupledBPUUBTBEntries;
+    unsigned decoupledBPUBTBWays;
+    unsigned decoupledBPUBTBSets;
+    unsigned decoupledBPUTTWays;
+    unsigned decoupledBPUTTSets;
+    std::unique_ptr<::bpu> decoupledBpus[MaxThreads];
+    std::unique_ptr<::cfi_tracer> decoupledBPUTracers[MaxThreads];
+    int decoupledBPULastSpeculativeId[MaxThreads];
+    bool decoupledBPUFtqFullLastCycle[MaxThreads];
+    bool decoupledBPUJalrStall[MaxThreads];
+    InstSeqNum decoupledBPUJalrStallSeqNum[MaxThreads];
+    Addr decoupledBPUJalrStallPC[MaxThreads];
+
+    struct DecoupledBpuFetchPredictionSegment
+    {
+        bool valid = false;
+        Addr entryBase = 0;
+        int spanStart2B = 0;
+        int spanCount2B = 0;
+        bool takenValid = false;
+        bpu_sign_t takenSign;
+        Addr target = 0;
+        bool jalrFail = false;
+        int speculativeId = -1;
+    };
+
+    std::vector<DecoupledBpuFetchPredictionSegment>
+        decoupledBPUFetchPredictions[MaxThreads];
+
+    struct DecoupledBpuPendingCommit
+    {
+        bool valid = false;
+        InstSeqNum seqNum = 0;
+        bpu_commit_update_t update;
+    };
+
+    std::deque<DecoupledBpuPendingCommit>
+        decoupledBPUPendingCommits[MaxThreads];
 
     std::unique_ptr<PCStateBase> pc[MaxThreads];
 
@@ -574,6 +672,41 @@ class Fetch
          * due to a squash.
          */
         statistics::Scalar tlbSquashes;
+        statistics::Scalar decoupledBpuTicks;
+        statistics::Scalar decoupledBpuFtqEmptyOnRequest;
+        statistics::Scalar decoupledBpuFtqFullOnTick;
+        statistics::Scalar decoupledBpuFtqPushes;
+        statistics::Scalar decoupledBpuFtqConsumes;
+        statistics::Scalar decoupledBpuUbtbHits;
+        statistics::Scalar decoupledBpuUbtbMisses;
+        statistics::Scalar decoupledBpuBtbHits;
+        statistics::Scalar decoupledBpuBtbMisses;
+        statistics::Scalar decoupledBpuTageHits;
+        statistics::Scalar decoupledBpuTageMisses;
+        statistics::Scalar decoupledBpuTTHits;
+        statistics::Scalar decoupledBpuTTMisses;
+        statistics::Scalar decoupledBpuRASHits;
+        statistics::Scalar decoupledBpuRASMisses;
+        statistics::Scalar decoupledBpuITTAGEHits;
+        statistics::Scalar decoupledBpuITTAGEMisses;
+        statistics::Scalar decoupledBpuUbtbFills;
+        statistics::Scalar decoupledBpuCfiRecords;
+        statistics::Scalar decoupledBpuBtbCommitInserts;
+        statistics::Scalar decoupledBpuBtbCtrUpdates;
+        statistics::Scalar decoupledBpuTTCommitUpdates;
+        statistics::Scalar decoupledBpuDecodeRedirects;
+        statistics::Scalar decoupledBpuBackendRedirects;
+        statistics::Scalar decoupledBpuFetchPredecodeRedirects;
+        statistics::Scalar decoupledBpuDecodeDirectCondRedirects;
+        statistics::Scalar decoupledBpuDecodeDirectUncondRedirects;
+        statistics::Scalar decoupledBpuDecodeIndirectRedirects;
+        statistics::Scalar decoupledBpuDecodeReturnRedirects;
+        statistics::Scalar decoupledBpuDecodeOtherRedirects;
+        statistics::Scalar decoupledBpuBackendDirectCondRedirects;
+        statistics::Scalar decoupledBpuBackendDirectUncondRedirects;
+        statistics::Scalar decoupledBpuBackendIndirectRedirects;
+        statistics::Scalar decoupledBpuBackendReturnRedirects;
+        statistics::Scalar decoupledBpuBackendOtherRedirects;
         /** Distribution of number of instructions fetched each cycle. */
         statistics::Distribution nisnDist;
         /** Rate of how often fetch was idle. */

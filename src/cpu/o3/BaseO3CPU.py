@@ -205,6 +205,25 @@ class BaseO3CPU(BaseCPU):
     branchPred = Param.BranchPredictor(
         TournamentBP(numThreads=Parent.numThreads), "Branch Predictor"
     )
+    decoupledBPU = Param.Bool(False, "Enable experimental BPU/FTQ frontend")
+    decoupledBPUUseTAGE = Param.Bool(
+        True, "Enable TAGE-side lookups in the experimental BPU path"
+    )
+    decoupledBPUUseRAS = Param.Bool(
+        True, "Enable RAS-side lookups in the experimental BPU path"
+    )
+    decoupledBPUUseITTAGE = Param.Bool(
+        True, "Enable ITTAGE-side lookups in the experimental BPU path"
+    )
+    decoupledBPUFTQDepth = Param.Unsigned(32, "Experimental BPU FTQ depth")
+    decoupledBPUUBTBEntries = Param.Unsigned(
+        32, "Experimental BPU uBTB entry count"
+    )
+    decoupledBPUBTBWays = Param.Unsigned(1, "Experimental BPU BTB ways")
+    decoupledBPUBTBSets = Param.Unsigned(128, "Experimental BPU BTB sets")
+    decoupledBPUBanks = Param.Unsigned(4, "Experimental BPU bank count")
+    decoupledBPUTTWays = Param.Unsigned(1, "Experimental BPU TT ways")
+    decoupledBPUTTSets = Param.Unsigned(128, "Experimental BPU TT sets")
     needsTSO = Param.Bool(False, "Enable TSO Memory model")
 
     recvRespThrottling = Param.Bool(
