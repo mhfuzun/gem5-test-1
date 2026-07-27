@@ -293,3 +293,8 @@ sayacini sisirmez. `--ras-reset-on-unrecoverable on`, snapshot/recover state'i
 kayboldugunda RAS'i temiz baslangic durumuna resetler. Iki secenek de varsayilan
 olarak `off` gelir; boylece eski `myRas` ve default RAS kosulari aynen tekrar
 uretilebilir.
+
+## Terminal coremark testi
+```bash
+./m5ops reset && ./coremark_nIter 1 && ./m5ops dump
+```
