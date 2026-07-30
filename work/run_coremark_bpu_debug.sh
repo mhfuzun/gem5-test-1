@@ -21,6 +21,10 @@ GEM5_BIN="${GEM5_BIN:-build/RISCV/gem5.opt}"
 SE_CONFIG="${SE_CONFIG:-configs/deprecated/example/se.py}"
 COREMARK_DIR="${COREMARK_DIR:-work/benchs/coremark/coremark}"
 COREMARK_BIN="${COREMARK_BIN:-${COREMARK_DIR}/coremark.exe}"
+# coremark_nIter is meant to receive the iteration count on argv[1].  Default
+# to one explicit iteration so rebuilt binaries do not accidentally enter
+# CoreMark's auto-calibration path; set COREMARK_ARGS="" to test no-arg mode.
+COREMARK_ARGS="${COREMARK_ARGS-1}"
 OUTDIR="${OUTDIR:-m5out/coremark-bpu-debug}"
 
 # Set BPU_DEBUG=0 for fast runs.  When disabled, gem5 is launched without
@@ -55,6 +59,7 @@ INDIRECT_BP_TYPE="${INDIRECT_BP_TYPE:-SimpleIndirectPredictor}"
 
 # Decoupled frontend table knobs.  They map to BaseO3CPU.py params.
 BPU_ENABLE="${BPU_ENABLE:-True}"
+BPU_BURST_TICKS="${BPU_BURST_TICKS:-24}"
 BPU_FTQ_DEPTH="${BPU_FTQ_DEPTH:-64}"
 BPU_UBTB_ENTRIES="${BPU_UBTB_ENTRIES:-128}"
 BPU_BTB_WAYS="${BPU_BTB_WAYS:-4}"
@@ -111,6 +116,7 @@ else
 fi
 echo "[gem5] stats: ${OUTDIR}/stats.txt"
 echo "[coremark] binary: ${COREMARK_BIN} (${COREMARK_BIN_INFO})"
+echo "[coremark] args: ${COREMARK_ARGS:-<none>}"
 echo "[bpu] decoupled: ${BPU_ENABLE}"
 echo "[coremark] stdout: ${COREMARK_STDOUT}"
 echo "[coremark] stderr: ${COREMARK_STDERR}"
@@ -128,6 +134,13 @@ if [[ -n "${MAXINSTS}" ]]; then
     SE_STOP_ARGS+=(-I "${MAXINSTS}")
 fi
 
+SE_CMD_ARGS=(
+    --cmd="${COREMARK_BIN}"
+)
+if [[ -n "${COREMARK_ARGS}" ]]; then
+    SE_CMD_ARGS+=(--options="${COREMARK_ARGS}")
+fi
+
 exec "${GEM5_BIN}" \
     --outdir="${OUTDIR}" \
     "${GEM5_DEBUG_ARGS[@]}" \
@@ -136,13 +149,14 @@ exec "${GEM5_BIN}" \
     --bp-type="${BP_TYPE}" \
     --indirect-bp-type="${INDIRECT_BP_TYPE}" \
     --caches \
-    --cmd="${COREMARK_BIN}" \
+    "${SE_CMD_ARGS[@]}" \
     "${SE_IO_ARGS[@]}" \
     "${SE_STOP_ARGS[@]}" \
     -P system.cpu[0].decoupledBPU="${BPU_ENABLE}" \
     -P system.cpu[0].decoupledBPUUseTAGE="${BPU_USE_TAGE}" \
     -P system.cpu[0].decoupledBPUUseRAS="${BPU_USE_RAS}" \
     -P system.cpu[0].decoupledBPUUseITTAGE="${BPU_USE_ITTAGE}" \
+    -P system.cpu[0].decoupledBPUBurstTicks="${BPU_BURST_TICKS}" \
     -P system.cpu[0].decoupledBPUFTQDepth="${BPU_FTQ_DEPTH}" \
     -P system.cpu[0].decoupledBPUUBTBEntries="${BPU_UBTB_ENTRIES}" \
     -P system.cpu[0].decoupledBPUBTBWays="${BPU_BTB_WAYS}" \

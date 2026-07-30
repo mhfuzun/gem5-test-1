@@ -1,6 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
+
+using bpu_addr_t = std::uint64_t;
 
 struct bpu_cfg
 {
@@ -70,8 +73,8 @@ struct bpu_sign_t
 struct ubtb_entry_t
 {
     bool valid = false;
-    int tag = 0;
-    int target = 0;
+    bpu_addr_t tag = 0;
+    bpu_addr_t target = 0;
     bpu_sign_t cfi_sign;
     // Bank-aligned distance, in 2-byte units, from the redirect base to the
     // next fetch block that should be probed for CFI.
@@ -81,7 +84,7 @@ struct ubtb_entry_t
 struct btb_entry_record_t
 {
     bool valid = false;
-    int target = 0;
+    bpu_addr_t target = 0;
     bpu_sign_t cfi_sign;
     int branch_ctr = 0;
     // Taken path and fallthrough path CFI-probe distances. Both are measured
@@ -93,7 +96,7 @@ struct btb_entry_record_t
 struct btb_entry_t
 {
     bool valid = false;
-    int tag = 0;
+    bpu_addr_t tag = 0;
     // Logical fetch-block offset inside the banked tag group. This is only a
     // small halfword offset, not a full PC; it keeps records from different
     // shifted bases from being merged into the same BTB entry.
@@ -105,15 +108,15 @@ struct btb_entry_t
 struct tt_entry_t
 {
     bool valid = false;
-    int tag = 0;
-    int target = 0;
+    bpu_addr_t tag = 0;
+    bpu_addr_t target = 0;
 };
 
 struct ubtb_response_t
 {
     bool valid = false;
     bool taken = false;
-    int target = 0;
+    bpu_addr_t target = 0;
     int next_cfi_span_2b = 0;
     bpu_sign_t sign;
 };
@@ -122,7 +125,7 @@ struct btb_response_t
 {
     bool valid = false;
     bool taken = false;
-    int target = 0;
+    bpu_addr_t target = 0;
     int next_cfi_span_2b = 0;
     bpu_sign_t sign;
     bool tt_hit = false;
@@ -138,7 +141,7 @@ struct btb_response_t
 struct tage_lookup_slot_t
 {
     bool valid = false;
-    int pc = 0;
+    bpu_addr_t pc = 0;
     bpu_sign_t sign;
 };
 
@@ -154,13 +157,13 @@ struct tage_response_t
 struct ras_response_t
 {
     bool valid = false;
-    int target = 0;
+    bpu_addr_t target = 0;
 };
 
 struct tt_response_t
 {
     bool hit = false;
-    int target = 0;
+    bpu_addr_t target = 0;
 };
 
 struct tt_bank_response_t
@@ -171,7 +174,7 @@ struct tt_bank_response_t
 struct ittage_response_t
 {
     bool hit = false;
-    int target = 0;
+    bpu_addr_t target = 0;
     int next_cfi_span_2b = 0;
     int checkpoint_id = -1;
 };
@@ -179,12 +182,12 @@ struct ittage_response_t
 struct ftq_entry_t
 {
     bool valid = false;
-    int base_addr = 0;
+    bpu_addr_t base_addr = 0;
     // How many 2-byte chunks IFU should fetch starting from base_addr.
     int fetch_span_2b = 0;
     // How many 2-byte chunks have already been accepted by IFU/cache.
     int consumed_span_2b = 0;
-    int target = 0;
+    bpu_addr_t target = 0;
     // Bank-aligned distance from target/base to the next predicted CFI block.
     int next_cfi_span_2b = 0;
     bool jalr_fail = false;
@@ -196,7 +199,7 @@ struct ftq_entry_t
 struct bpu_cycle_input_t
 {
     bool base_valid = false;
-    int base_addr = 0;
+    bpu_addr_t base_addr = 0;
     bool use_tage = false;
     bool use_ras = false;
     bool use_ittage = false;
@@ -209,7 +212,7 @@ struct bpu_cycle_input_t
 struct bpu_redirect_t
 {
     bool valid = false;
-    int target = 0;
+    bpu_addr_t target = 0;
     int next_cfi_span_2b = 0;
     bpu_sign_t sign;
 };
@@ -221,17 +224,17 @@ struct bpu_cycle_output_t
     bpu_redirect_t redirect;
     tage_response_t tage_response;
     ittage_response_t ittage_response;
-    int lookup_cfi_addr = 0;
+    bpu_addr_t lookup_cfi_addr = 0;
     int bpu1_old_fetch_span_2b = 0;
     int bpu1_new_fetch_span_2b = 0;
     int bpu1_added_fetch_span_2b = 0;
-    int bpu1_next_cfi_addr = 0;
+    bpu_addr_t bpu1_next_cfi_addr = 0;
     int bpu2_old_fetch_span_2b = 0;
     int bpu2_new_fetch_span_2b = 0;
-    int bpu2_next_cfi_addr = 0;
+    bpu_addr_t bpu2_next_cfi_addr = 0;
     int bpu3_old_fetch_span_2b = 0;
     int bpu3_new_fetch_span_2b = 0;
-    int bpu3_next_cfi_addr = 0;
+    bpu_addr_t bpu3_next_cfi_addr = 0;
     bool bpu3_redirect = false;
     bool ftq_pushed = false;
     bool ftq_updated = false;
@@ -244,13 +247,13 @@ struct btb_commit_update_t
     bool insert_entry = false;
     // Physical bank PC used to select the BTB bank/set that will receive this
     // update. For CFI tracer updates this is fetch_block + bank_slot stride.
-    int pc = 0;
+    bpu_addr_t pc = 0;
     // Logical lookup PC used for the BTB tag and for bank-slot walkback.
     // When valid, branch_sign.offset is fetch-block-local, not bank-local.
     bool lookup_pc_valid = false;
-    int lookup_pc = 0;
+    bpu_addr_t lookup_pc = 0;
     bool ubtb_pc_valid = false;
-    int ubtb_pc = 0;
+    bpu_addr_t ubtb_pc = 0;
     btb_entry_t entry;
     bool update_branch_ctr = false;
     bpu_sign_t branch_sign;
@@ -268,12 +271,12 @@ struct tt_commit_update_t
     bool valid = false;
     // Physical bank PC. This keeps TT in the same bank lane as the BTB JALR
     // record that requested the target.
-    int pc = 0;
+    bpu_addr_t pc = 0;
     // Logical lookup PC used for TT tag generation, matching the BTB lookup
     // base for that fetch block.
     bool lookup_pc_valid = false;
-    int lookup_pc = 0;
-    int target = 0;
+    bpu_addr_t lookup_pc = 0;
+    bpu_addr_t target = 0;
 };
 
 struct bpu_commit_update_t
@@ -287,13 +290,13 @@ struct bpu_speculative_node_t
 {
     bool valid = false;
     int id = -1;
-    int cfi_addr = 0;
+    bpu_addr_t cfi_addr = 0;
     btb_response_t bpu2_response;
     bool resolved_by_bpu3 = false;
     bool flushed = false;
     bool ubtb_fill_valid = false;
-    int ubtb_fill_pc = 0;
+    bpu_addr_t ubtb_fill_pc = 0;
     std::vector<int> tage_checkpoint_ids;
     int ittage_checkpoint_id = -1;
-    std::vector<int> ras_snapshot;
+    std::vector<bpu_addr_t> ras_snapshot;
 };

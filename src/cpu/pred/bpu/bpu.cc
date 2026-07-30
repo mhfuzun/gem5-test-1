@@ -33,7 +33,7 @@ bpu::reset()
 }
 
 void
-bpu::set_base_addr(int pc)
+bpu::set_base_addr(bpu_addr_t pc)
 {
     base_addr = pc;
     pending_next_cfi_span_2b = 0;
@@ -49,7 +49,7 @@ bpu::tick(const bpu_cycle_input_t& input)
     }
 
     cfi_addr = compute_cfi_addr();
-    const int lookup_cfi_addr = cfi_addr;
+    const bpu_addr_t lookup_cfi_addr = cfi_addr;
     bpu_cycle_output_t output;
     output.lookup_cfi_addr = lookup_cfi_addr;
 
@@ -116,7 +116,7 @@ bpu::tick(const bpu_cycle_input_t& input)
     if (input.use_ittage && ittage_enabled &&
         ittage_response.checkpoint_id < 0 && output.bpu2.valid &&
         output.bpu2.sign.type == CFI_JALR_CALL) {
-        const int jalr_pc =
+        const bpu_addr_t jalr_pc =
             lookup_cfi_addr + output.bpu2.sign.offset * 2;
         ittage_response = bpu_ittage_predictor.lookup(jalr_pc);
         mark_ittage_checkpoint(output.bpu2.speculative_id,
@@ -170,7 +170,7 @@ bpu::tick(const bpu_cycle_input_t& input)
 }
 
 ubtb_response_t
-bpu::run_bpu1(int pc)
+bpu::run_bpu1(bpu_addr_t pc)
 {
     ubtb_response_t ubtb_response = bpu_ubtb.predict(pc);
     // ubtb oku, sonucu ftq içine base adres ve span olarak yaz.
@@ -208,7 +208,7 @@ bpu::run_bpu1(int pc)
 }
 
 btb_response_t
-bpu::run_bpu2(int pc, tage_response_t tage_response,
+bpu::run_bpu2(bpu_addr_t pc, tage_response_t tage_response,
               tt_bank_response_t tt_response, ras_response_t ras_response)
 {
     // ...
@@ -261,7 +261,7 @@ bpu::run_bpu2(int pc, tage_response_t tage_response,
                                          tage_checkpoint_ids, -1);
         update_ras_from_prediction(pc, btb_response);
     } else if (tage_response.valid) {
-        bpu_tage_predictor.keep_path(tage_response, 0, false);
+        bpu_tage_predictor.discard_response(tage_response);
     }
 
     ftq_entry_t* entry = bpu_ftq.back();
@@ -298,7 +298,7 @@ bpu::run_bpu2(int pc, tage_response_t tage_response,
 }
 
 bpu_redirect_t
-bpu::run_bpu3(int pc, const btb_response_t& bpu2_response,
+bpu::run_bpu3(bpu_addr_t pc, const btb_response_t& bpu2_response,
               ittage_response_t ittage_response)
 {
     // ...
@@ -389,7 +389,7 @@ bpu::ftq_full() const
 }
 
 void
-bpu::recover(int pc, int speculative_id, bool include_self)
+bpu::recover(bpu_addr_t pc, int speculative_id, bool include_self)
 {
     if (speculative_id >= 0) {
         squash_speculative_nodes(speculative_id, include_self);
@@ -405,19 +405,19 @@ bpu::recover(int pc, int speculative_id, bool include_self)
 }
 
 void
-bpu::update_ubtb(int pc, const ubtb_entry_t& entry)
+bpu::update_ubtb(bpu_addr_t pc, const ubtb_entry_t& entry)
 {
     bpu_ubtb.insert_or_update(pc, entry);
 }
 
 void
-bpu::update_btb(int pc, const btb_entry_t& entry)
+bpu::update_btb(bpu_addr_t pc, const btb_entry_t& entry)
 {
     bpu_btb.insert_or_update(pc, entry);
 }
 
 void
-bpu::update_tt(int pc, int target)
+bpu::update_tt(bpu_addr_t pc, bpu_addr_t target)
 {
     bpu_tt.insert_or_update(pc, target);
 }
@@ -430,16 +430,16 @@ bpu::commit(const bpu_commit_update_t& update)
     if (update.btb_update.valid && update.btb_update.update_branch_ctr &&
         btb_result.branch_ctr_updated &&
         !btb_result.branch_strongly_taken) {
-        const int ubtb_pc = update.btb_update.ubtb_pc_valid ?
+        const bpu_addr_t ubtb_pc = update.btb_update.ubtb_pc_valid ?
             update.btb_update.ubtb_pc : update.btb_update.pc;
         bpu_ubtb.invalidate(ubtb_pc);
     }
 
     bpu_tt.commit(update.tt_update);
 
-    const int lookup_pc = update.btb_update.lookup_pc_valid ?
+    const bpu_addr_t lookup_pc = update.btb_update.lookup_pc_valid ?
         update.btb_update.lookup_pc : update.btb_update.pc;
-    const int cfi_pc =
+    const bpu_addr_t cfi_pc =
         lookup_pc + std::max(0, update.btb_update.branch_sign.offset) * 2;
 
     if (tage_enabled && update.btb_update.valid &&
@@ -448,7 +448,7 @@ bpu::commit(const bpu_commit_update_t& update)
         bpu_speculative_node_t* node =
             find_speculative_node(update.speculative_id);
         if (node != nullptr && node->bpu2_response.sign.type == CFI_BRA) {
-            const int node_cfi_pc =
+            const bpu_addr_t node_cfi_pc =
                 node->cfi_addr +
                 std::max(0, node->bpu2_response.sign.offset) * 2;
             if (node_cfi_pc == cfi_pc) {
@@ -485,7 +485,31 @@ bpu::get_speculative_nodes() const
     return speculative_nodes;
 }
 
-int
+std::size_t
+bpu::speculative_node_count() const
+{
+    return speculative_nodes.size();
+}
+
+std::size_t
+bpu::ras_depth() const
+{
+    return ras_stack.size();
+}
+
+std::size_t
+bpu::tage_checkpoint_count() const
+{
+    return bpu_tage_predictor.checkpoint_count();
+}
+
+std::size_t
+bpu::ittage_checkpoint_count() const
+{
+    return bpu_ittage_predictor.checkpoint_count();
+}
+
+bpu_addr_t
 bpu::compute_cfi_addr() const
 {
     return base_addr + pending_next_cfi_span_2b * 2;
@@ -537,7 +561,8 @@ bpu::make_ftq_base_sign(const bpu_sign_t& sign) const
 }
 
 void
-bpu::advance_from_prediction(bool taken, int target, int next_cfi_span_2b)
+bpu::advance_from_prediction(bool taken, bpu_addr_t target,
+                             int next_cfi_span_2b)
 {
     if (taken) {
         base_addr = target;
@@ -558,7 +583,7 @@ bpu::advance_fallthrough(int next_cfi_span_2b)
 
 int
 bpu::create_bpu2_speculative_node(
-    int pc, const btb_response_t& response,
+    bpu_addr_t pc, const btb_response_t& response,
     const std::vector<int>& tage_checkpoint_ids,
     int ittage_checkpoint_id)
 {
@@ -572,6 +597,7 @@ bpu::create_bpu2_speculative_node(
     node.ittage_checkpoint_id = ittage_checkpoint_id;
     node.ras_snapshot = ras_stack;
     speculative_nodes.push_back(node);
+    trim_speculative_nodes();
     return node.id;
 }
 
@@ -610,7 +636,7 @@ bpu::mark_ittage_checkpoint(int speculative_id, int checkpoint_id)
 }
 
 void
-bpu::mark_ubtb_fill(int speculative_id, int pc)
+bpu::mark_ubtb_fill(int speculative_id, bpu_addr_t pc)
 {
     bpu_speculative_node_t* node = find_speculative_node(speculative_id);
     if (node == nullptr) {
@@ -633,7 +659,8 @@ bpu::make_ras_response(ras_response_t response) const
 }
 
 void
-bpu::update_ras_from_prediction(int pc, const btb_response_t& response)
+bpu::update_ras_from_prediction(bpu_addr_t pc,
+                                const btb_response_t& response)
 {
     if (!response.valid) {
         return;
@@ -646,9 +673,11 @@ bpu::update_ras_from_prediction(int pc, const btb_response_t& response)
     if ((response.sign.type == CFI_JAL ||
          response.sign.type == CFI_JALR_CALL) &&
         response.sign.is_call) {
-        const int cfi_pc = pc + std::max(0, response.sign.offset) * 2;
-        const int return_pc = cfi_pc + cfi_inst_size_2b(response.sign) * 2;
-        ras_stack.push_back(return_pc);
+        const bpu_addr_t cfi_pc =
+            pc + std::max(0, response.sign.offset) * 2;
+        const bpu_addr_t return_pc =
+            cfi_pc + cfi_inst_size_2b(response.sign) * 2;
+        push_ras(return_pc);
         return;
     }
 
@@ -670,6 +699,23 @@ bpu::retire_speculative_through(int speculative_id)
                 return node.id <= speculative_id;
             }),
         speculative_nodes.end());
+}
+
+void
+bpu::trim_speculative_nodes()
+{
+    while (speculative_nodes.size() > max_speculative_nodes) {
+        speculative_nodes.erase(speculative_nodes.begin());
+    }
+}
+
+void
+bpu::push_ras(bpu_addr_t return_pc)
+{
+    if (ras_stack.size() >= max_ras_depth) {
+        ras_stack.erase(ras_stack.begin());
+    }
+    ras_stack.push_back(return_pc);
 }
 
 void

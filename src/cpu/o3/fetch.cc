@@ -157,6 +157,7 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
       decoupledBPUUseTAGE(params.decoupledBPUUseTAGE),
       decoupledBPUUseRAS(params.decoupledBPUUseRAS),
       decoupledBPUUseITTAGE(params.decoupledBPUUseITTAGE),
+      decoupledBPUBurstTicks(std::max(1U, params.decoupledBPUBurstTicks)),
       decoupledBPUBanks(params.decoupledBPUBanks),
       decoupledBPUFTQDepth(params.decoupledBPUFTQDepth),
       decoupledBPUUBTBEntries(params.decoupledBPUUBTBEntries),
@@ -319,6 +320,19 @@ Fetch::FetchStatGroup::FetchStatGroup(CPU *cpu, Fetch *fetch)
              "Number of outstanding ITLB misses that were squashed"),
     ADD_STAT(decoupledBpuTicks, statistics::units::Count::get(),
              "Number of experimental decoupled BPU ticks"),
+    ADD_STAT(decoupledBpuBursts, statistics::units::Count::get(),
+             "Number of demand-driven experimental decoupled BPU bursts"),
+    ADD_STAT(decoupledBpuSpeculativeNodesMax,
+             statistics::units::Count::get(),
+             "Maximum live experimental BPU speculative nodes observed"),
+    ADD_STAT(decoupledBpuRASDepthMax, statistics::units::Count::get(),
+             "Maximum experimental BPU RAS depth observed"),
+    ADD_STAT(decoupledBpuTageCheckpointsMax,
+             statistics::units::Count::get(),
+             "Maximum live experimental BPU TAGE checkpoints observed"),
+    ADD_STAT(decoupledBpuITTAGECheckpointsMax,
+             statistics::units::Count::get(),
+             "Maximum live experimental BPU ITTAGE checkpoints observed"),
     ADD_STAT(decoupledBpuFtqEmptyOnRequest, statistics::units::Count::get(),
              "Number of fetch requests that found the experimental FTQ empty"),
     ADD_STAT(decoupledBpuFtqFullOnTick, statistics::units::Count::get(),
@@ -1204,20 +1218,20 @@ Fetch::recordDecoupledBPUCommitInfo(ThreadID tid, const DynInstPtr &inst)
         target = inst->readPredTarg().instAddr();
         target_valid = true;
     }
-
     cfi_tracer::cfi_point_t point;
     point.sign = sign;
-    point.target = target_valid ? static_cast<int>(target) : 0;
+    point.target = target_valid ? static_cast<bpu_addr_t>(target) : 0;
     point.next_cfi_span_2b = 0;
     point.seq_num = inst->seqNum;
 
     decoupledBPUTracers[tid]->add_fetch_block(
-        tid, static_cast<int>(cfi_block_addr), inst->seqNum, inst->seqNum,
+        tid, static_cast<bpu_addr_t>(cfi_block_addr), inst->seqNum,
+        inst->seqNum,
         {point});
 
     std::vector<btb_commit_update_t> btb_updates =
         decoupledBPUTracers[tid]->make_btb_commit_updates(
-            tid, static_cast<int>(cfi_block_addr));
+            tid, static_cast<bpu_addr_t>(cfi_block_addr));
 
     for (btb_commit_update_t& btb_update : btb_updates) {
         bpu_commit_update_t update;
@@ -1252,7 +1266,7 @@ Fetch::recordDecoupledBPUCommitInfo(ThreadID tid, const DynInstPtr &inst)
             update.tt_update.lookup_pc_valid =
                 update.btb_update.lookup_pc_valid;
             update.tt_update.lookup_pc = update.btb_update.lookup_pc;
-            update.tt_update.target = static_cast<int>(target);
+            update.tt_update.target = static_cast<bpu_addr_t>(target);
         }
 
         DecoupledBpuPendingCommit pending;
@@ -1290,9 +1304,9 @@ Fetch::updateDecoupledBPUMispredictCommitInfo(
         it->update.btb_update.update_branch_ctr = cfi_type == CFI_BRA;
 
         if (inst->isIndirectCtrl()) {
-            const int actual_target =
+            const bpu_addr_t actual_target =
                 it->update.btb_update.branch_taken ?
-                static_cast<int>(target.instAddr()) : 0;
+                static_cast<bpu_addr_t>(target.instAddr()) : 0;
             auto patch_target =
                 [actual_target](btb_entry_record_t& record) {
                     if (record.valid) {
@@ -1416,6 +1430,19 @@ Fetch::tickDecoupledBPU(ThreadID tid)
     bpu_cycle_input_t input =
         makeDecoupledBPUInput(tid, pc[tid]->instAddr());
     const bpu_cycle_output_t output = decoupledBpus[tid]->tick(input);
+    fetchStats.decoupledBpuSpeculativeNodesMax =
+        std::max<double>(decoupledBpus[tid]->speculative_node_count(),
+                         fetchStats.decoupledBpuSpeculativeNodesMax.value());
+    fetchStats.decoupledBpuRASDepthMax =
+        std::max<double>(decoupledBpus[tid]->ras_depth(),
+                         fetchStats.decoupledBpuRASDepthMax.value());
+    fetchStats.decoupledBpuTageCheckpointsMax =
+        std::max<double>(decoupledBpus[tid]->tage_checkpoint_count(),
+                         fetchStats.decoupledBpuTageCheckpointsMax.value());
+    fetchStats.decoupledBpuITTAGECheckpointsMax =
+        std::max<double>(
+            decoupledBpus[tid]->ittage_checkpoint_count(),
+            fetchStats.decoupledBpuITTAGECheckpointsMax.value());
     if (output.bpu2.speculative_id >= 0) {
         decoupledBPULastSpeculativeId[tid] = output.bpu2.speculative_id;
     }
@@ -1474,6 +1501,24 @@ Fetch::tickDecoupledBPU(ThreadID tid)
     }
 }
 
+void
+Fetch::pumpDecoupledBPU(ThreadID tid, unsigned budget)
+{
+    if (!decoupledBPUEnabled || !decoupledBpus[tid] || budget == 0) {
+        return;
+    }
+
+    ++fetchStats.decoupledBpuBursts;
+
+    for (unsigned i = 0; i < budget; ++i) {
+        tickDecoupledBPU(tid);
+        if (decoupledBPUJalrStall[tid] ||
+            decoupledBpus[tid]->ftq_full()) {
+            break;
+        }
+    }
+}
+
 bool
 Fetch::decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr)
 {
@@ -1491,7 +1536,7 @@ Fetch::decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr)
     while (true) {
         if (!decoupledBpus[tid]->ftq_ready()) {
             ++fetchStats.decoupledBpuFtqEmptyOnRequest;
-            tickDecoupledBPU(tid);
+            pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
             if (!decoupledBpus[tid]->ftq_ready()) {
                 return stale_recovered_to_fetch;
             }
@@ -1517,10 +1562,11 @@ Fetch::decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr)
                     "[tid:%i] FTQ keeps producing stale coverage behind "
                     "fetch request %#x; recovering BPU to fetch PC\n",
                     tid, fetch_addr);
-            decoupledBpus[tid]->recover(static_cast<int>(fetch_addr), -1,
-                                        true);
+            decoupledBpus[tid]->recover(static_cast<bpu_addr_t>(fetch_addr),
+                                        -1, true);
             decoupledBPULastSpeculativeId[tid] = -1;
             stale_recovered_to_fetch = true;
+            pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
             continue;
         }
 
@@ -1556,8 +1602,10 @@ Fetch::decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr)
             "[tid:%i] FTQ front %#x does not cover fetch request %#x; "
             "recovering BPU to fetch PC\n",
             tid, front_fetch_addr, fetch_addr);
-    decoupledBpus[tid]->recover(static_cast<int>(fetch_addr), -1, true);
+    decoupledBpus[tid]->recover(static_cast<bpu_addr_t>(fetch_addr), -1,
+                                true);
     decoupledBPULastSpeculativeId[tid] = -1;
+    pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
 
     return true;
 }
@@ -1572,8 +1620,8 @@ Fetch::recoverDecoupledBPU(ThreadID tid, const PCStateBase &new_pc,
 
     const int speculative_id = squashInst ?
         squashInst->getDecoupledBpuSpeculativeId() : -1;
-    decoupledBpus[tid]->recover(new_pc.instAddr(), speculative_id,
-                                include_self);
+    decoupledBpus[tid]->recover(static_cast<bpu_addr_t>(new_pc.instAddr()),
+                                speculative_id, include_self);
     decoupledBPULastSpeculativeId[tid] = -1;
     clearDecoupledBPUJalrStall(tid);
 
@@ -1767,20 +1815,21 @@ Fetch::applyDecoupledBPUPrediction(const DynInstPtr &inst,
     return true;
 }
 
-void
+bool
 Fetch::consumeDecoupledFTQCacheBlock(ThreadID tid, Addr fetch_addr)
 {
     if (!decoupledBPUEnabled || !decoupledBpus[tid]) {
-        return;
+        return false;
     }
 
     const Addr block_start = fetchBufferAlignPC(fetch_addr);
     const Addr block_end = block_start + fetchBufferSize;
+    bool consumed_any = false;
 
     while (true) {
         const ftq_entry_t* front = decoupledBpus[tid]->get_ftq_front();
         if (front == nullptr || front->fetch_span_2b <= 0) {
-            return;
+            return consumed_any;
         }
 
         const Addr entry_base = static_cast<Addr>(front->base_addr);
@@ -1792,23 +1841,24 @@ Fetch::consumeDecoupledFTQCacheBlock(ThreadID tid, Addr fetch_addr)
         const Addr front_end = entry_base + front->fetch_span_2b * 2;
 
         if (front_base >= block_end || front_end <= block_start) {
-            return;
+            return consumed_any;
         }
 
         const Addr consume_end = std::min(front_end, block_end);
         const int two_byte_count =
             static_cast<int>((consume_end - front_base) / 2);
         if (two_byte_count <= 0) {
-            return;
+            return consumed_any;
         }
 
         recordDecoupledBPUFetchPrediction(tid, *front, span_start_2b,
                                            two_byte_count);
         decoupledBpus[tid]->consume_ftq(two_byte_count);
+        consumed_any = true;
         ++fetchStats.decoupledBpuFtqConsumes;
 
         if (two_byte_count < front_span_2b) {
-            return;
+            return true;
         }
     }
 }
@@ -1978,12 +2028,6 @@ Fetch::tick()
     }
 
     DPRINTF(Fetch, "Running stage.\n");
-
-    if (decoupledBPUEnabled) {
-        for (ThreadID tid : *activeThreads) {
-            tickDecoupledBPU(tid);
-        }
-    }
 
     if (FullSystem) {
         if (fromCommit->commitInfo[0].interruptPending) {
@@ -2327,7 +2371,9 @@ Fetch::fetch(bool &status_change)
             const bool fetch_started =
                 fetchCacheLine(fetchAddr, tid, this_pc.instAddr());
             if (fetch_started) {
-                consumeDecoupledFTQCacheBlock(tid, fetchAddr);
+                if (consumeDecoupledFTQCacheBlock(tid, fetchAddr)) {
+                    pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+                }
             }
 
             if (fetchStatus[tid] == IcacheWaitResponse) {
@@ -2341,7 +2387,9 @@ Fetch::fetch(bool &status_change)
         } else if (fetchBufferValid[tid] &&
                    fetchBufferBlockPC == fetchBufferPC[tid] && !inRom &&
                    !macroop[tid]) {
-            consumeDecoupledFTQCacheBlock(tid, fetchAddr);
+            if (consumeDecoupledFTQCacheBlock(tid, fetchAddr)) {
+                pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+            }
         } else if (checkInterrupt(this_pc.instAddr()) &&
                 !delayedCommit[tid]) {
             // Stall CPU if an interrupt is posted and we're not issuing
@@ -2754,7 +2802,9 @@ Fetch::pipelineIcacheAccesses(ThreadID tid)
         const bool fetch_started =
             fetchCacheLine(fetchAddr, tid, this_pc.instAddr());
         if (fetch_started) {
-            consumeDecoupledFTQCacheBlock(tid, fetchAddr);
+            if (consumeDecoupledFTQCacheBlock(tid, fetchAddr)) {
+                pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+            }
         }
     }
 }

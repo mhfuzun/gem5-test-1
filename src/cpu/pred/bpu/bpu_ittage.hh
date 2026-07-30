@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <vector>
@@ -13,27 +14,28 @@ class bpu_ittage
     bpu_ittage();
 
     void reset();
-    ittage_response_t lookup(int pc);
+    ittage_response_t lookup(bpu_addr_t pc);
     void clear_speculation();
     void squash_checkpoint(int checkpoint_id, bool include_self);
-    bool commit(int pc, int target, bool taken);
+    bool commit(bpu_addr_t pc, bpu_addr_t target, bool taken);
+    std::size_t checkpoint_count() const;
 
   private:
     struct entry_t
     {
         bool valid = false;
         std::uint64_t tag = 0;
-        int target = 0;
+        bpu_addr_t target = 0;
         std::uint8_t ctr = 0;
     };
 
     struct checkpoint_t
     {
         int id = -1;
-        int pc = 0;
+        bpu_addr_t pc = 0;
         std::uint64_t ghr = 0;
         bool hit = false;
-        int target = 0;
+        bpu_addr_t target = 0;
     };
 
     static constexpr int set_count = 512;
@@ -49,13 +51,17 @@ class bpu_ittage
     std::uint64_t ghr = 0;
     int next_checkpoint_id = 0;
 
+    static constexpr std::size_t max_checkpoint_count = 1024;
+
     std::uint64_t ghr_mask() const;
-    int index(int pc) const;
-    int index(int pc, std::uint64_t history) const;
-    std::uint64_t tag(int pc) const;
-    std::uint64_t tag(int pc, std::uint64_t history) const;
+    int index(bpu_addr_t pc) const;
+    int index(bpu_addr_t pc, std::uint64_t history) const;
+    std::uint64_t tag(bpu_addr_t pc) const;
+    std::uint64_t tag(bpu_addr_t pc, std::uint64_t history) const;
     void update_history(bool taken);
-    checkpoint_t* find_checkpoint(int pc);
+    checkpoint_t* find_checkpoint(bpu_addr_t pc);
     void erase_checkpoint_id(int checkpoint_id);
-    void record_target(int pc, int target, std::uint64_t history);
+    void record_target(bpu_addr_t pc, bpu_addr_t target,
+                       std::uint64_t history);
+    void trim_checkpoints();
 };

@@ -21,8 +21,8 @@ cfi_tracer::get_bank_slot(const bpu_sign_t& sign) const
     return std::min(bank_count - 1, offset / get_bank_2b_count());
 }
 
-int
-cfi_tracer::get_bank_pc(int fetch_block_addr, int bank_slot) const
+bpu_addr_t
+cfi_tracer::get_bank_pc(bpu_addr_t fetch_block_addr, int bank_slot) const
 {
     return fetch_block_addr + bank_slot * get_bank_2b_count() * 2;
 }
@@ -39,7 +39,7 @@ cfi_tracer::make_btb_sign(const bpu_sign_t& fetch_block_sign) const
 }
 
 void
-cfi_tracer::add_fetch_block(ThreadID tid, int fetch_block_addr,
+cfi_tracer::add_fetch_block(ThreadID tid, bpu_addr_t fetch_block_addr,
                             InstSeqNum first_seq, InstSeqNum last_seq,
                             const std::vector<cfi_point_t>& cfi_points)
 {
@@ -58,7 +58,7 @@ cfi_tracer::add_fetch_block(ThreadID tid, int fetch_block_addr,
 }
 
 cfi_tracer::check_result_t
-cfi_tracer::check(ThreadID tid, int fetch_block_addr,
+cfi_tracer::check(ThreadID tid, bpu_addr_t fetch_block_addr,
                   const std::vector<bpu_sign_t>& bpu_sign_vector) const
 {
     check_result_t result;
@@ -112,7 +112,7 @@ cfi_tracer::check(ThreadID tid, int fetch_block_addr,
 }
 
 const cfi_tracer::cfi_tracer_entry_t*
-cfi_tracer::lookup(ThreadID tid, int fetch_block_addr) const
+cfi_tracer::lookup(ThreadID tid, bpu_addr_t fetch_block_addr) const
 {
     for (auto it = cfi_tracer_entries.rbegin();
          it != cfi_tracer_entries.rend(); ++it) {
@@ -126,7 +126,7 @@ cfi_tracer::lookup(ThreadID tid, int fetch_block_addr) const
 }
 
 btb_entry_t
-cfi_tracer::make_btb_entry(ThreadID tid, int fetch_block_addr) const
+cfi_tracer::make_btb_entry(ThreadID tid, bpu_addr_t fetch_block_addr) const
 {
     const std::vector<btb_commit_update_t> updates =
         make_btb_commit_updates(tid, fetch_block_addr);
@@ -138,7 +138,8 @@ cfi_tracer::make_btb_entry(ThreadID tid, int fetch_block_addr) const
 }
 
 std::vector<btb_commit_update_t>
-cfi_tracer::make_btb_commit_updates(ThreadID tid, int fetch_block_addr) const
+cfi_tracer::make_btb_commit_updates(ThreadID tid,
+                                    bpu_addr_t fetch_block_addr) const
 {
     std::vector<btb_commit_update_t> updates;
     const cfi_tracer_entry_t* entry = lookup(tid, fetch_block_addr);

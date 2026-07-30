@@ -215,6 +215,9 @@ class BaseO3CPU(BaseCPU):
     decoupledBPUUseITTAGE = Param.Bool(
         True, "Enable ITTAGE-side lookups in the experimental BPU path"
     )
+    decoupledBPUBurstTicks = Param.Unsigned(
+        24, "Experimental BPU internal ticks to run per fetch demand"
+    )
     decoupledBPUFTQDepth = Param.Unsigned(32, "Experimental BPU FTQ depth")
     decoupledBPUUBTBEntries = Param.Unsigned(
         32, "Experimental BPU uBTB entry count"

@@ -25,15 +25,15 @@ bpu_ittage::ghr_mask() const
 }
 
 int
-bpu_ittage::index(int pc) const
+bpu_ittage::index(bpu_addr_t pc) const
 {
     return index(pc, ghr);
 }
 
 int
-bpu_ittage::index(int pc, std::uint64_t history) const
+bpu_ittage::index(bpu_addr_t pc, std::uint64_t history) const
 {
-    std::uint64_t hash = static_cast<std::uint64_t>(pc >> inst_shift);
+    std::uint64_t hash = pc >> inst_shift;
     hash ^= history;
     hash ^= (history << 5);
     hash ^= (hash >> 11);
@@ -41,15 +41,15 @@ bpu_ittage::index(int pc, std::uint64_t history) const
 }
 
 std::uint64_t
-bpu_ittage::tag(int pc) const
+bpu_ittage::tag(bpu_addr_t pc) const
 {
     return tag(pc, ghr);
 }
 
 std::uint64_t
-bpu_ittage::tag(int pc, std::uint64_t history) const
+bpu_ittage::tag(bpu_addr_t pc, std::uint64_t history) const
 {
-    std::uint64_t hash = static_cast<std::uint64_t>(pc >> inst_shift);
+    std::uint64_t hash = pc >> inst_shift;
     hash ^= (history << 1);
     hash ^= (history >> 3);
     return hash & ((std::uint64_t{1} << tag_bits) - 1);
@@ -62,7 +62,7 @@ bpu_ittage::update_history(bool taken)
 }
 
 ittage_response_t
-bpu_ittage::lookup(int pc)
+bpu_ittage::lookup(bpu_addr_t pc)
 {
     checkpoint_t checkpoint;
     checkpoint.id = next_checkpoint_id++;
@@ -84,6 +84,7 @@ bpu_ittage::lookup(int pc)
     }
 
     checkpoints.push_back(checkpoint);
+    trim_checkpoints();
 
     ittage_response_t response;
     response.hit = checkpoint.hit;
@@ -131,7 +132,7 @@ bpu_ittage::squash_checkpoint(int checkpoint_id, bool include_self)
 }
 
 bpu_ittage::checkpoint_t*
-bpu_ittage::find_checkpoint(int pc)
+bpu_ittage::find_checkpoint(bpu_addr_t pc)
 {
     for (checkpoint_t& checkpoint : checkpoints) {
         if (checkpoint.pc == pc) {
@@ -154,7 +155,22 @@ bpu_ittage::erase_checkpoint_id(int checkpoint_id)
 }
 
 void
-bpu_ittage::record_target(int pc, int target, std::uint64_t history)
+bpu_ittage::trim_checkpoints()
+{
+    while (checkpoints.size() > max_checkpoint_count) {
+        checkpoints.pop_front();
+    }
+}
+
+std::size_t
+bpu_ittage::checkpoint_count() const
+{
+    return checkpoints.size();
+}
+
+void
+bpu_ittage::record_target(bpu_addr_t pc, bpu_addr_t target,
+                          std::uint64_t history)
 {
     const int set = index(pc, history);
     const std::uint64_t lookup_tag = tag(pc, history);
@@ -196,14 +212,14 @@ bpu_ittage::record_target(int pc, int target, std::uint64_t history)
 }
 
 bool
-bpu_ittage::commit(int pc, int target, bool taken)
+bpu_ittage::commit(bpu_addr_t pc, bpu_addr_t target, bool taken)
 {
     checkpoint_t* checkpoint = find_checkpoint(pc);
     bool had_checkpoint = checkpoint != nullptr;
     std::uint64_t checkpoint_ghr = ghr;
     int checkpoint_id = -1;
     bool predicted_hit = false;
-    int predicted_target = 0;
+    bpu_addr_t predicted_target = 0;
 
     if (checkpoint != nullptr) {
         checkpoint_ghr = checkpoint->ghr;

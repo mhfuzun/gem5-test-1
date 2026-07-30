@@ -1168,6 +1168,12 @@ parser.add_argument(
     "--virtio-rng", action="store_true", help="Enable VirtIORng device."
 )
 parser.add_argument(
+    "--terminal-port",
+    type=int,
+    default=3456,
+    help="Host TCP port used by the RISC-V serial terminal.",
+)
+parser.add_argument(
     "--semihosting",
     action="store_true",
     help="Enable the RISC-V semihosting interface.",
@@ -1269,12 +1275,14 @@ else:
     system.workload = RiscvBootloaderKernelWorkload(**workload_args)
     system.workload.bootloader_filename = args.bootloader
     system.workload.object_file = args.kernel
+system.workload.remote_gdb_port = m5.options.remote_gdb_port
 
 system.iobus = IOXBar()
 system.membus = MemBus()
 system.system_port = system.membus.cpu_side_ports
 
 system.platform = HiFive()
+system.platform.terminal.port = args.terminal_port
 system.platform.rtc = RiscvRTC(frequency=Frequency("100MHz"))
 system.platform.clint.int_pin = system.platform.rtc.int_pin
 system.platform.pci_host.pio = system.iobus.mem_side_ports

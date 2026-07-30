@@ -9,7 +9,7 @@ ftq::ftq(ftq_cfg cfg)
 }
 
 ftq_entry_t*
-ftq::add_entry(int base_addr, int fetch_span_2b)
+ftq::add_entry(bpu_addr_t base_addr, int fetch_span_2b)
 {
     if (full()) {
         return nullptr;
@@ -44,7 +44,7 @@ ftq::add_bpu2pushes(ftq_entry_t& entry,
 }
 
 void
-ftq::add_bpu3pushes(ftq_entry_t& entry, int target)
+ftq::add_bpu3pushes(ftq_entry_t& entry, bpu_addr_t target)
 {
     entry.target = target;
 }

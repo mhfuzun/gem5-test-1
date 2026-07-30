@@ -11,18 +11,18 @@ positive_count(int value)
     return std::max(1, value);
 }
 
-int
+bpu_addr_t
 mask_bits(int width)
 {
     if (width <= 0) {
         return 0;
     }
 
-    if (width >= static_cast<int>(sizeof(int) * 8)) {
-        return ~0;
+    if (width >= static_cast<int>(sizeof(bpu_addr_t) * 8)) {
+        return ~bpu_addr_t{0};
     }
 
-    return (1 << width) - 1;
+    return (bpu_addr_t{1} << width) - 1;
 }
 
 } // namespace
@@ -61,34 +61,35 @@ tt_table::get_bank_2b_count() const
 }
 
 int
-tt_table::get_bank_index(int pc) const
+tt_table::get_bank_index(bpu_addr_t pc) const
 {
     const int banks = positive_count(cfg.bank_count);
-    const int bank_block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
-    return (bank_block % banks + banks) % banks;
+    const bpu_addr_t bank_block =
+        (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
+    return static_cast<int>(bank_block % static_cast<bpu_addr_t>(banks));
 }
 
 int
-tt_table::generate_index(int pc) const
+tt_table::generate_index(bpu_addr_t pc) const
 {
     const int sets = positive_count(cfg.set_count);
     const int banks = positive_count(cfg.bank_count);
-    int block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
+    bpu_addr_t block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
     block /= banks;
-    return (block % sets + sets) % sets;
+    return static_cast<int>(block % static_cast<bpu_addr_t>(sets));
 }
 
-int
-tt_table::generate_tag(int pc) const
+bpu_addr_t
+tt_table::generate_tag(bpu_addr_t pc) const
 {
     const int banks = positive_count(cfg.bank_count);
-    int block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
+    bpu_addr_t block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
     block /= banks;
     return block & mask_bits(cfg.tag_width);
 }
 
 tt_bank_response_t
-tt_table::lookup(int pc)
+tt_table::lookup(bpu_addr_t pc)
 {
     tt_bank_response_t response;
     response.banks.resize(positive_count(cfg.bank_count));
@@ -96,7 +97,7 @@ tt_table::lookup(int pc)
     const int pc_bank = get_bank_index(pc);
     const int idx = generate_index(pc);
     const int next_idx = (idx + 1) % positive_count(cfg.set_count);
-    const int tag = generate_tag(pc);
+    const bpu_addr_t tag = generate_tag(pc);
 
     for (int bank_offset = 0; bank_offset < positive_count(cfg.bank_count);
          ++bank_offset) {
@@ -123,13 +124,13 @@ tt_table::lookup(int pc)
 }
 
 void
-tt_table::insert_or_update(int pc, int target)
+tt_table::insert_or_update(bpu_addr_t pc, bpu_addr_t target)
 {
     insert_or_update(pc, target, pc);
 }
 
 void
-tt_table::insert_or_update(int pc, int target, int tag_pc)
+tt_table::insert_or_update(bpu_addr_t pc, bpu_addr_t target, bpu_addr_t tag_pc)
 {
     if (tt.empty()) {
         return;
@@ -137,7 +138,7 @@ tt_table::insert_or_update(int pc, int target, int tag_pc)
 
     const int bank = get_bank_index(pc);
     const int idx = generate_index(pc);
-    const int tag = generate_tag(tag_pc);
+    const bpu_addr_t tag = generate_tag(tag_pc);
 
     tt_entry_t* entry = nullptr;
     std::size_t entry_way = 0;
@@ -180,7 +181,7 @@ tt_table::commit(const tt_commit_update_t& update)
         return;
     }
 
-    const int lookup_pc =
+    const bpu_addr_t lookup_pc =
         update.lookup_pc_valid ? update.lookup_pc : update.pc;
     insert_or_update(update.pc, update.target, lookup_pc);
 }

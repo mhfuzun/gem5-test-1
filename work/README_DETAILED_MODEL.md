@@ -69,18 +69,40 @@ make install
 ./util/term/m5term localhost 3456
 ```
 
+FS restore scripti gem5'i `--listener-mode=on` ile başlatır. Bu önemli:
+gem5'in varsayılan `listener-mode=auto` modu stdin gerçek terminal değilse
+tüm listener socket'lerini kapatır ve bu durumda m5term bağlanamaz. Başarılı
+başlangıçta gem5 stdout'unda şu satırı görmelisin:
+
+```text
+system.platform.terminal: Listening for connections on port 3456
+```
+
+Port doluysa restore scriptini `TERMINAL_PORT=3457` gibi farklı bir portla
+başlatıp m5term'i aynı porta bağla:
+
+```bash
+TERMINAL_PORT=3457 CHECKPOINT_DIR=m5out_rasCheckpoint CHECKPOINT=1 \
+  ./work/run_fs_checkpoint_bpu.sh
+./util/term/m5term localhost 3457
+```
+
+`m5term` içindeyken `Ctrl+C` gem5'i kapatmaz; bağlı Linux konsoluna gönderilir.
+`m5term`den çıkmak için satır başında `~.` yaz. gem5'i durdurmak için gem5'in
+çalıştığı terminalde `Ctrl+C` kullan veya başka bir terminalden süreci sonlandır.
+
 ## checkpoint
 ```bash
 CHECKPOINT=1
 
-build/RISCV/gem5.opt -d m5out_t3 \
+build/RISCV/gem5.opt -d m5out_bpu_test \
   configs/example/riscv/fs_linux_detailed_o3.py \
   --kernel ./boot-tests/bootloader-vmlinux-5.10 \
   --disk-image ./boot-tests/ubuntu-riscv.raw.img \
   --command-line="console=ttyS0 root=/dev/vda1 ro init=/sbin/init" \
   --cpu-type=RiscvO3CPU \
   --restore-with-cpu=AtomicSimpleCPU \
-  --checkpoint-dir=m5out_t3 \
+  --checkpoint-dir=m5out_rasCheckpoint \
   -r $CHECKPOINT \
   --cpu-clock 2GHz \
   --sys-clock 1GHz \
@@ -100,7 +122,7 @@ build/RISCV/gem5.opt -d m5out_t3 \
   --num-iq-entries 128 \
   --lq-entries 64 \
   --sq-entries 64 \
-  --bp-type MyTAGE
+  --bp-type TAGE
 ```
 
 `--checkpoint-dir` restore edilecek checkpoint klasorunu gosterir. Yeni ciktilari

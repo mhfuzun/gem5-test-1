@@ -15,7 +15,7 @@ class cfi_tracer
         struct cfi_point_t
         {
             bpu_sign_t sign;
-            int target = 0;
+            bpu_addr_t target = 0;
             int next_cfi_span_2b = 0;
             InstSeqNum seq_num = 0;
         };
@@ -26,7 +26,7 @@ class cfi_tracer
             ThreadID tid = 0;
             InstSeqNum first_seq = 0;
             InstSeqNum last_seq = 0;
-            int fetch_block_addr = 0;
+            bpu_addr_t fetch_block_addr = 0;
             std::vector<cfi_point_t> cfi_points;
         };
 
@@ -35,7 +35,7 @@ class cfi_tracer
             bool mismatch = false;
             bool needs_redirect = false;
             bool wait_for_backend = false;
-            int redirect_target = 0;
+            bpu_addr_t redirect_target = 0;
             bpu_sign_t sign;
         };
 
@@ -49,7 +49,7 @@ class cfi_tracer
         // eşlenebilmesi için thread id ve seqNum aralığını taşır; BTB update
         // gerektiğinde ise aynı entry içindeki CFI noktaları btb_entry_t
         // formatına çevrilebilir.
-        void add_fetch_block(ThreadID tid, int fetch_block_addr,
+        void add_fetch_block(ThreadID tid, bpu_addr_t fetch_block_addr,
                              InstSeqNum first_seq, InstSeqNum last_seq,
                              const std::vector<cfi_point_t>& cfi_points);
 
@@ -68,15 +68,16 @@ class cfi_tracer
         // için register değeri backend'de çözüleceğinden sonuç
         // wait_for_backend olarak döner. SHQ gelince predictor-history onarımı
         // bu mismatch sonucundaki seqNum/CFI bilgisine bağlanacak.
-        check_result_t check(ThreadID tid, int fetch_block_addr,
+        check_result_t check(ThreadID tid, bpu_addr_t fetch_block_addr,
                              const std::vector<bpu_sign_t>& bpu_sign_vector)
             const;
 
-        const cfi_tracer_entry_t* lookup(ThreadID tid, int fetch_block_addr)
-            const;
-        btb_entry_t make_btb_entry(ThreadID tid, int fetch_block_addr) const;
+        const cfi_tracer_entry_t* lookup(ThreadID tid,
+                                         bpu_addr_t fetch_block_addr) const;
+        btb_entry_t make_btb_entry(ThreadID tid,
+                                   bpu_addr_t fetch_block_addr) const;
         std::vector<btb_commit_update_t> make_btb_commit_updates(
-            ThreadID tid, int fetch_block_addr) const;
+            ThreadID tid, bpu_addr_t fetch_block_addr) const;
         void squash_after(ThreadID tid, InstSeqNum seq_num);
         void commit_until(ThreadID tid, InstSeqNum done_seq);
         void clear();
@@ -89,6 +90,7 @@ class cfi_tracer
 
         int get_bank_2b_count() const;
         int get_bank_slot(const bpu_sign_t& sign) const;
-        int get_bank_pc(int fetch_block_addr, int bank_slot) const;
+        bpu_addr_t get_bank_pc(bpu_addr_t fetch_block_addr,
+                               int bank_slot) const;
         bpu_sign_t make_btb_sign(const bpu_sign_t& fetch_block_sign) const;
 };

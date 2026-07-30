@@ -87,6 +87,7 @@ bpu_tage::predict(const std::vector<tage_lookup_slot_t>& slots)
         response.predictions[i] = checkpoint.prediction;
         response.checkpoint_ids[i] = checkpoint.id;
         checkpoints.push_back(checkpoint);
+        trim_checkpoints();
     }
 
     return response;
@@ -127,6 +128,22 @@ bpu_tage::keep_path(const tage_response_t& response, int stop_offset_2b,
 }
 
 void
+bpu_tage::discard_response(const tage_response_t& response)
+{
+    int first_checkpoint = -1;
+    for (int checkpoint_id : response.checkpoint_ids) {
+        if (checkpoint_id >= 0 &&
+            (first_checkpoint < 0 || checkpoint_id < first_checkpoint)) {
+            first_checkpoint = checkpoint_id;
+        }
+    }
+
+    if (first_checkpoint >= 0) {
+        squash_checkpoint(first_checkpoint, true);
+    }
+}
+
+void
 bpu_tage::clear_speculation()
 {
     if (!checkpoints.empty()) {
@@ -160,7 +177,7 @@ bpu_tage::squash_checkpoint(int checkpoint_id, bool include_self)
 }
 
 bpu_tage::checkpoint_t*
-bpu_tage::find_checkpoint(int pc)
+bpu_tage::find_checkpoint(bpu_addr_t pc)
 {
     for (checkpoint_t& checkpoint : checkpoints) {
         if (checkpoint.pc == pc) {
@@ -194,8 +211,22 @@ bpu_tage::erase_checkpoint_id(int checkpoint_id)
         checkpoints.end());
 }
 
+void
+bpu_tage::trim_checkpoints()
+{
+    while (checkpoints.size() > max_checkpoint_count) {
+        checkpoints.pop_front();
+    }
+}
+
+std::size_t
+bpu_tage::checkpoint_count() const
+{
+    return checkpoints.size();
+}
+
 bool
-bpu_tage::commit(int pc, bool taken)
+bpu_tage::commit(bpu_addr_t pc, bool taken)
 {
     checkpoint_t* checkpoint = find_checkpoint(pc);
     if (checkpoint == nullptr) {
@@ -229,7 +260,7 @@ bpu_tage::commit(int pc, bool taken)
 }
 
 bool
-bpu_tage::commit_checkpoint(int checkpoint_id, int pc, bool taken)
+bpu_tage::commit_checkpoint(int checkpoint_id, bpu_addr_t pc, bool taken)
 {
     if (checkpoint_id < 0) {
         return commit(pc, taken);

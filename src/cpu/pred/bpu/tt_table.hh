@@ -10,12 +10,13 @@ class tt_table
 {
     public:
         tt_table(tt_cfg cfg);
-        int generate_tag(int pc) const;
-        int get_bank_index(int pc) const;
-        int generate_index(int pc) const;
-        tt_bank_response_t lookup(int pc);
-        void insert_or_update(int pc, int target);
-        void insert_or_update(int pc, int target, int tag_pc);
+        bpu_addr_t generate_tag(bpu_addr_t pc) const;
+        int get_bank_index(bpu_addr_t pc) const;
+        int generate_index(bpu_addr_t pc) const;
+        tt_bank_response_t lookup(bpu_addr_t pc);
+        void insert_or_update(bpu_addr_t pc, bpu_addr_t target);
+        void insert_or_update(bpu_addr_t pc, bpu_addr_t target,
+                              bpu_addr_t tag_pc);
         void commit(const tt_commit_update_t& update);
 
     private:

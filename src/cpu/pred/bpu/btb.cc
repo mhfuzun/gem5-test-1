@@ -12,18 +12,18 @@ positive_count(int value)
     return std::max(1, value);
 }
 
-int
+bpu_addr_t
 mask_bits(int width)
 {
     if (width <= 0) {
         return 0;
     }
 
-    if (width >= static_cast<int>(sizeof(int) * 8)) {
-        return ~0;
+    if (width >= static_cast<int>(sizeof(bpu_addr_t) * 8)) {
+        return ~bpu_addr_t{0};
     }
 
-    return (1 << width) - 1;
+    return (bpu_addr_t{1} << width) - 1;
 }
 
 } // namespace
@@ -55,28 +55,29 @@ btb::btb(btb_cfg cfg)
 }
 
 int
-btb::get_bank_index(int pc) const
+btb::get_bank_index(bpu_addr_t pc) const
 {
     const int banks = positive_count(cfg.bank_count);
-    const int bank_block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
-    return (bank_block % banks + banks) % banks;
+    const bpu_addr_t bank_block =
+        (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
+    return static_cast<int>(bank_block % static_cast<bpu_addr_t>(banks));
 }
 
 int
-btb::generate_index(int pc) const
+btb::generate_index(bpu_addr_t pc) const
 {
     const int sets = positive_count(cfg.set_count);
     const int banks = positive_count(cfg.bank_count);
-    int block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
+    bpu_addr_t block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
     block /= banks;
-    return (block % sets + sets) % sets;
+    return static_cast<int>(block % static_cast<bpu_addr_t>(sets));
 }
 
-int
-btb::generate_tag(int pc) const
+bpu_addr_t
+btb::generate_tag(bpu_addr_t pc) const
 {
     const int banks = positive_count(cfg.bank_count);
-    int block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
+    bpu_addr_t block = (pc >> cfg.tag_pc_shift) / get_bank_2b_count();
     block /= banks;
     return block & mask_bits(cfg.tag_width);
 }
@@ -118,7 +119,7 @@ btb::is_direct_fillable(const btb_entry_record_t& entry) const
 }
 
 std::vector<btb::btb_lookup_bank_t>
-btb::lookup(int pc) const
+btb::lookup(bpu_addr_t pc) const
 {
     std::vector<btb_lookup_bank_t> result;
     result.reserve(positive_count(cfg.bank_count));
@@ -126,7 +127,7 @@ btb::lookup(int pc) const
     const int pc_bank = get_bank_index(pc);
     const int idx = generate_index(pc);
     const int next_idx = (idx + 1) % positive_count(cfg.set_count);
-    const int tag = generate_tag(pc);
+    const bpu_addr_t tag = generate_tag(pc);
     const int bank_2b_count = get_bank_2b_count();
     const int lookup_base_offset_2b =
         ((pc >> cfg.tag_pc_shift) % bank_2b_count + bank_2b_count) %
@@ -197,7 +198,7 @@ btb::lookup(int pc) const
 }
 
 std::vector<tage_lookup_slot_t>
-btb::lookup_tage_slots(int pc) const
+btb::lookup_tage_slots(bpu_addr_t pc) const
 {
     const int banks = positive_count(cfg.bank_count);
     std::vector<tage_lookup_slot_t> slots(static_cast<std::size_t>(banks) * 2);
@@ -228,7 +229,7 @@ btb::lookup_tage_slots(int pc) const
 }
 
 void
-btb::predict(btb_response_t& response, int pc,
+btb::predict(btb_response_t& response, bpu_addr_t pc,
              tage_response_t tage_response, tt_bank_response_t tt_response,
              ras_response_t ras_response)
 {
@@ -236,7 +237,7 @@ btb::predict(btb_response_t& response, int pc,
 }
 
 btb_response_t
-btb::predict(int pc, tage_response_t tage_response,
+btb::predict(bpu_addr_t pc, tage_response_t tage_response,
              tt_bank_response_t tt_response,
              ras_response_t ras_response)
 {
@@ -364,13 +365,14 @@ btb::predict(int pc, tage_response_t tage_response,
 }
 
 void
-btb::insert_or_update(int pc, const btb_entry_t& new_entry)
+btb::insert_or_update(bpu_addr_t pc, const btb_entry_t& new_entry)
 {
     insert_or_update(pc, new_entry, pc);
 }
 
 void
-btb::insert_or_update(int pc, const btb_entry_t& new_entry, int tag_pc)
+btb::insert_or_update(bpu_addr_t pc, const btb_entry_t& new_entry,
+                      bpu_addr_t tag_pc)
 {
     if (btb_table.empty()) {
         return;
@@ -379,7 +381,7 @@ btb::insert_or_update(int pc, const btb_entry_t& new_entry, int tag_pc)
     const int bank = get_bank_index(pc);
     const int idx = generate_index(pc);
 
-    const int tag = generate_tag(tag_pc);
+    const bpu_addr_t tag = generate_tag(tag_pc);
     const int base_offset_2b =
         ((tag_pc >> cfg.tag_pc_shift) % get_bank_2b_count() +
          get_bank_2b_count()) % get_bank_2b_count();
@@ -472,7 +474,7 @@ btb::insert_or_update(int pc, const btb_entry_t& new_entry, int tag_pc)
 }
 
 btb_entry_record_t*
-btb::find_branch_record(int pc, const bpu_sign_t& branch_sign)
+btb::find_branch_record(bpu_addr_t pc, const bpu_sign_t& branch_sign)
 {
     if (btb_table.empty()) {
         return nullptr;
@@ -481,7 +483,7 @@ btb::find_branch_record(int pc, const bpu_sign_t& branch_sign)
     const int pc_bank = get_bank_index(pc);
     const int idx = generate_index(pc);
     const int next_idx = (idx + 1) % positive_count(cfg.set_count);
-    const int tag = generate_tag(pc);
+    const bpu_addr_t tag = generate_tag(pc);
     const int bank_2b_count = get_bank_2b_count();
     const int lookup_base_offset_2b =
         ((pc >> cfg.tag_pc_shift) % bank_2b_count + bank_2b_count) %
@@ -533,7 +535,8 @@ btb::find_branch_record(int pc, const bpu_sign_t& branch_sign)
 }
 
 btb_commit_result_t
-btb::update_branch_ctr(int pc, const bpu_sign_t& branch_sign, bool taken)
+btb::update_branch_ctr(bpu_addr_t pc, const bpu_sign_t& branch_sign,
+                       bool taken)
 {
     btb_commit_result_t result;
     btb_entry_record_t* record = find_branch_record(pc, branch_sign);
@@ -561,13 +564,13 @@ btb::commit(const btb_commit_update_t& update)
     }
 
     if (update.insert_entry) {
-        const int lookup_pc = update.lookup_pc_valid ?
+        const bpu_addr_t lookup_pc = update.lookup_pc_valid ?
             update.lookup_pc : update.pc;
         insert_or_update(update.pc, update.entry, lookup_pc);
     }
 
     if (update.update_branch_ctr) {
-        const int lookup_pc = update.lookup_pc_valid ?
+        const bpu_addr_t lookup_pc = update.lookup_pc_valid ?
             update.lookup_pc : update.pc;
         result = update_branch_ctr(lookup_pc, update.branch_sign,
                                    update.branch_taken);
@@ -577,7 +580,8 @@ btb::commit(const btb_commit_update_t& update)
 }
 
 ubtb_entry_t
-btb::make_ubtb_entry(int cfi_addr, const btb_response_t& btb_response) const
+btb::make_ubtb_entry(bpu_addr_t cfi_addr,
+                     const btb_response_t& btb_response) const
 {
     (void)cfi_addr;
 

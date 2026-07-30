@@ -342,6 +342,7 @@ class Fetch
     };
 
     void tickDecoupledBPU(ThreadID tid);
+    void pumpDecoupledBPU(ThreadID tid, unsigned budget);
     bool decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr);
     void recoverDecoupledBPU(ThreadID tid, const PCStateBase &new_pc,
                              const DynInstPtr &squashInst,
@@ -361,7 +362,7 @@ class Fetch
     bool decoupledBPUWaitingForJalr(ThreadID tid,
                                     const DynInstPtr &inst) const;
     void clearDecoupledBPUJalrStall(ThreadID tid);
-    void consumeDecoupledFTQCacheBlock(ThreadID tid, Addr fetch_addr);
+    bool consumeDecoupledFTQCacheBlock(ThreadID tid, Addr fetch_addr);
     bool checkDecoupledBPUPredecode(ThreadID tid, const DynInstPtr &inst,
                                     PCStateBase &next_pc);
     bpu_cycle_input_t makeDecoupledBPUInput(ThreadID tid, Addr base) const;
@@ -472,6 +473,7 @@ class Fetch
     bool decoupledBPUUseTAGE;
     bool decoupledBPUUseRAS;
     bool decoupledBPUUseITTAGE;
+    unsigned decoupledBPUBurstTicks;
     unsigned decoupledBPUBanks;
     unsigned decoupledBPUFTQDepth;
     unsigned decoupledBPUUBTBEntries;
@@ -673,6 +675,11 @@ class Fetch
          */
         statistics::Scalar tlbSquashes;
         statistics::Scalar decoupledBpuTicks;
+        statistics::Scalar decoupledBpuBursts;
+        statistics::Scalar decoupledBpuSpeculativeNodesMax;
+        statistics::Scalar decoupledBpuRASDepthMax;
+        statistics::Scalar decoupledBpuTageCheckpointsMax;
+        statistics::Scalar decoupledBpuITTAGECheckpointsMax;
         statistics::Scalar decoupledBpuFtqEmptyOnRequest;
         statistics::Scalar decoupledBpuFtqFullOnTick;
         statistics::Scalar decoupledBpuFtqPushes;

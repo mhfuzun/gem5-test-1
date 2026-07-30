@@ -6,18 +6,18 @@
 namespace
 {
 
-int
+bpu_addr_t
 mask_bits(int width)
 {
     if (width <= 0) {
         return 0;
     }
 
-    if (width >= static_cast<int>(sizeof(int) * 8)) {
-        return ~0;
+    if (width >= static_cast<int>(sizeof(bpu_addr_t) * 8)) {
+        return ~bpu_addr_t{0};
     }
 
-    return (1 << width) - 1;
+    return (bpu_addr_t{1} << width) - 1;
 }
 
 } // namespace
@@ -31,12 +31,12 @@ ubtb::ubtb(ubtb_cfg cfg) {
     rebuild_index();
 }
 
-int ubtb::generate_tag(int pc) const {
+bpu_addr_t ubtb::generate_tag(bpu_addr_t pc) const {
     return (pc >> cfg.tag_pc_shift) & mask_bits(cfg.tag_width);
 }
 
-ubtb_entry_t* ubtb::lookup(int pc) {
-    int tag = generate_tag(pc);
+ubtb_entry_t* ubtb::lookup(bpu_addr_t pc) {
+    bpu_addr_t tag = generate_tag(pc);
 
     auto it = tag_index.find(tag);
     if (it == tag_index.end()) {
@@ -51,8 +51,8 @@ ubtb_entry_t* ubtb::lookup(int pc) {
     return entry.valid && entry.tag == tag ? &entry : nullptr;
 }
 
-const ubtb_entry_t* ubtb::lookup(int pc) const {
-    int tag = generate_tag(pc);
+const ubtb_entry_t* ubtb::lookup(bpu_addr_t pc) const {
+    bpu_addr_t tag = generate_tag(pc);
 
     auto it = tag_index.find(tag);
     if (it == tag_index.end()) {
@@ -63,7 +63,7 @@ const ubtb_entry_t* ubtb::lookup(int pc) const {
     return entry.valid && entry.tag == tag ? &entry : nullptr;
 }
 
-ubtb_response_t ubtb::predict(int pc) {
+ubtb_response_t ubtb::predict(bpu_addr_t pc) {
     const ubtb_entry_t* entry = lookup(pc);
 
     if (entry != nullptr) {
@@ -80,13 +80,13 @@ ubtb_response_t ubtb::predict(int pc) {
 }
 
 void
-ubtb::insert_or_update(int pc, const ubtb_entry_t& new_entry)
+ubtb::insert_or_update(bpu_addr_t pc, const ubtb_entry_t& new_entry)
 {
     if (ubtb_entries.empty()) {
         return;
     }
 
-    int tag = generate_tag(pc);
+    bpu_addr_t tag = generate_tag(pc);
     auto it = tag_index.find(tag);
     std::size_t idx = 0;
 
@@ -117,7 +117,7 @@ ubtb::insert_or_update(int pc, const ubtb_entry_t& new_entry)
 }
 
 void
-ubtb::invalidate(int pc)
+ubtb::invalidate(bpu_addr_t pc)
 {
     ubtb_entry_t* entry = lookup(pc);
     if (entry == nullptr) {

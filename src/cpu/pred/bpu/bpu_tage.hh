@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <deque>
 #include <memory>
 #include <vector>
@@ -17,16 +18,18 @@ class bpu_tage
     std::vector<int> keep_path(const tage_response_t& response,
                                int stop_offset_2b,
                                bool has_stop);
+    void discard_response(const tage_response_t& response);
     void clear_speculation();
     void squash_checkpoint(int checkpoint_id, bool include_self);
-    bool commit(int pc, bool taken);
-    bool commit_checkpoint(int checkpoint_id, int pc, bool taken);
+    bool commit(bpu_addr_t pc, bool taken);
+    bool commit_checkpoint(int checkpoint_id, bpu_addr_t pc, bool taken);
+    std::size_t checkpoint_count() const;
 
   private:
     struct checkpoint_t
     {
         int id = -1;
-        int pc = 0;
+        bpu_addr_t pc = 0;
         bool prediction = false;
         tage::TAGE_State state;
     };
@@ -36,8 +39,11 @@ class bpu_tage
     std::deque<checkpoint_t> checkpoints;
     int next_checkpoint_id = 0;
 
+    static constexpr std::size_t max_checkpoint_count = 4096;
+
     static tage_cfg_t make_default_cfg();
-    checkpoint_t* find_checkpoint(int pc);
+    checkpoint_t* find_checkpoint(bpu_addr_t pc);
     checkpoint_t* find_checkpoint_id(int checkpoint_id);
     void erase_checkpoint_id(int checkpoint_id);
+    void trim_checkpoints();
 };
