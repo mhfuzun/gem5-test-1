@@ -152,6 +152,8 @@ cfi_tracer::make_btb_commit_updates(ThreadID tid,
         record.valid = true;
         record.target = cfi_point.target;
         record.cfi_sign = cfi_point.sign;
+        record.taken_next_cfi_addr = cfi_point.next_cfi_addr;
+        record.fallthrough_next_cfi_addr = cfi_point.next_cfi_addr;
         record.taken_next_cfi_span_2b = cfi_point.next_cfi_span_2b;
         record.fallthrough_next_cfi_span_2b = cfi_point.next_cfi_span_2b;
     };

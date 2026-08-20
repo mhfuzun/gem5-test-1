@@ -4,6 +4,7 @@
 #include <vector>
 
 using bpu_addr_t = std::uint64_t;
+using bpu_tag_t = std::uint64_t;
 
 struct bpu_cfg
 {
@@ -12,6 +13,23 @@ struct bpu_cfg
     static constexpr int fetch_block_halfWorld_cnt = fetch_block_2b_count;
     static constexpr int btb_branch_ctr_max = 3;
     static constexpr int btb_branch_ctr_strong_taken = 3;
+};
+
+struct abtb_cfg
+{
+    int bank_count;
+    int set_count;
+    int tag_width = 0;
+    int tag_pc_shift = 0;
+};
+
+struct sbtb_cfg
+{
+    int bank_count = 0;
+    int set_count = 0;
+    int way_count = 0;
+    int tag_width = 0;
+    int tag_pc_shift = 0;
 };
 
 struct ubtb_cfg
@@ -76,6 +94,7 @@ struct ubtb_entry_t
     bpu_addr_t tag = 0;
     bpu_addr_t target = 0;
     bpu_sign_t cfi_sign;
+    bpu_addr_t next_cfi_addr = 0;
     // Bank-aligned distance, in 2-byte units, from the redirect base to the
     // next fetch block that should be probed for CFI.
     int next_cfi_span_2b = 0;
@@ -87,6 +106,8 @@ struct btb_entry_record_t
     bpu_addr_t target = 0;
     bpu_sign_t cfi_sign;
     int branch_ctr = 0;
+    bpu_addr_t taken_next_cfi_addr = 0;
+    bpu_addr_t fallthrough_next_cfi_addr = 0;
     // Taken path and fallthrough path CFI-probe distances. Both are measured
     // in 2-byte units and should already point to a bank-aligned fetch block.
     int taken_next_cfi_span_2b = 0;
@@ -117,6 +138,7 @@ struct ubtb_response_t
     bool valid = false;
     bool taken = false;
     bpu_addr_t target = 0;
+    bpu_addr_t next_cfi_addr = 0;
     int next_cfi_span_2b = 0;
     bpu_sign_t sign;
 };
@@ -126,6 +148,7 @@ struct btb_response_t
     bool valid = false;
     bool taken = false;
     bpu_addr_t target = 0;
+    bpu_addr_t next_cfi_addr = 0;
     int next_cfi_span_2b = 0;
     bpu_sign_t sign;
     bool tt_hit = false;
@@ -175,6 +198,7 @@ struct ittage_response_t
 {
     bool hit = false;
     bpu_addr_t target = 0;
+    bpu_addr_t next_cfi_addr = 0;
     int next_cfi_span_2b = 0;
     int checkpoint_id = -1;
 };
@@ -188,11 +212,25 @@ struct ftq_entry_t
     // How many 2-byte chunks have already been accepted by IFU/cache.
     int consumed_span_2b = 0;
     bpu_addr_t target = 0;
+    bpu_addr_t next_cfi_addr = 0;
     // Bank-aligned distance from target/base to the next predicted CFI block.
     int next_cfi_span_2b = 0;
     bool jalr_fail = false;
     int speculative_id = -1;
     bpu_sign_t cfi_taken_sign;
+    bool abtb_taken_valid = false;
+    bpu_sign_t abtb_taken_sign;
+    bpu_addr_t abtb_target = 0;
+    bool sbtb_taken_valid = false;
+    bpu_sign_t sbtb_taken_sign;
+    bpu_addr_t sbtb_target = 0;
+    bool btb_prediction_valid = false;
+    bool btb_prediction_taken = false;
+    bpu_sign_t btb_prediction_sign;
+    bpu_addr_t btb_prediction_target = 0;
+    bool tage_prediction_valid = false;
+    bool tage_prediction_taken = false;
+    bpu_sign_t tage_prediction_sign;
     std::vector<bpu_sign_t> cfi_sign_vector;
 };
 
@@ -213,6 +251,7 @@ struct bpu_redirect_t
 {
     bool valid = false;
     bpu_addr_t target = 0;
+    bpu_addr_t next_cfi_addr = 0;
     int next_cfi_span_2b = 0;
     bpu_sign_t sign;
 };
@@ -221,6 +260,7 @@ struct bpu_cycle_output_t
 {
     ubtb_response_t bpu1;
     btb_response_t bpu2;
+    btb_response_t bpu3;
     bpu_redirect_t redirect;
     tage_response_t tage_response;
     ittage_response_t ittage_response;

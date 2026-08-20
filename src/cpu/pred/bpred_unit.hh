@@ -100,6 +100,25 @@ class BPredUnit : public SimObject
                  PCStateBase &pc, ThreadID tid);
 
     /**
+     * Same architectural branch prediction path as predict(), but the
+     * predictor components are indexed with predictor_pc. If taken_target is
+     * provided and the direction predictor says taken, it replaces the target
+     * stored in the history entry.
+     */
+    bool predictWithPC(const StaticInstPtr &inst, const InstSeqNum &seqNum,
+                       PCStateBase &pc, ThreadID tid, Addr predictor_pc,
+                       const PCStateBase *taken_target = nullptr);
+
+    /**
+     * Adds a predictor-history entry for a branch that the fetch frontend
+     * intentionally treats as not taken without a direction lookup.
+     */
+    bool predictNotTakenWithPC(const StaticInstPtr &inst,
+                               const InstSeqNum &seqNum,
+                               PCStateBase &pc, ThreadID tid,
+                               Addr predictor_pc);
+
+    /**
      * Tells the branch predictor to commit any updates until the given
      * sequence number.
      * @param done_sn The sequence number to commit any older updates up until.
@@ -438,7 +457,9 @@ class BPredUnit : public SimObject
      * Internal prediction function.
      */
     bool predict(const StaticInstPtr &inst, const InstSeqNum &seqNum,
-               PCStateBase &pc, ThreadID tid, PredictorHistory* &bpu_history);
+               PCStateBase &pc, ThreadID tid, PredictorHistory* &bpu_history,
+               Addr predictor_pc = MaxAddr,
+               const PCStateBase *taken_target = nullptr);
 
     /**
      * Squashes a particular branch instance. Reverts

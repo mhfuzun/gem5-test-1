@@ -6,6 +6,7 @@ if [[ $# -lt 3 ]]; then
     exit 1
 fi
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 src_root="$(realpath "$1")"
 isa="$2"
 mkdir -p "$3"
@@ -105,7 +106,12 @@ while IFS= read -r module_so; do
     copy_needed_libs "${module_so}"
 done < <(find "${bundle_root}/python" -type f -name '*.so')
 
-cp -a /usr/local/bin/run-gem5.sh "${bundle_root}/run.sh"
+run_gem5_template="/usr/local/bin/run-gem5.sh"
+if [[ ! -f "${run_gem5_template}" ]]; then
+    run_gem5_template="${script_dir}/run-gem5.sh"
+fi
+
+cp -a "${run_gem5_template}" "${bundle_root}/run.sh"
 chmod +x "${bundle_root}/run.sh"
 
 cat > "${bundle_root}/BUILD_INFO.txt" <<EOF

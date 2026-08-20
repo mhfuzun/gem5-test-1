@@ -71,6 +71,7 @@ ubtb_response_t ubtb::predict(bpu_addr_t pc) {
         response.valid = true;
         response.taken = entry->valid;
         response.target = entry->target;
+        response.next_cfi_addr = entry->next_cfi_addr;
         response.next_cfi_span_2b = entry->next_cfi_span_2b;
         response.sign = entry->cfi_sign;
         return response;

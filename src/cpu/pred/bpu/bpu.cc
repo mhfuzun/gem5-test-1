@@ -129,6 +129,7 @@ bpu::tick(const bpu_cycle_input_t& input)
         bpu3_old_entry == nullptr ? 0 : bpu3_old_entry->fetch_span_2b;
     output.redirect = run_bpu3(lookup_cfi_addr, output.bpu2,
                                ittage_response);
+    output.bpu3 = output.bpu2;
     output.bpu3_redirect = output.redirect.valid;
     const ftq_entry_t* bpu3_new_entry = bpu_ftq.back();
     output.bpu3_new_fetch_span_2b =
@@ -292,6 +293,15 @@ bpu::run_bpu2(bpu_addr_t pc, tage_response_t tage_response,
         entry->cfi_taken_sign = stops_at_response ? ftq_base_sign :
             bpu_sign_t{};
         entry->speculative_id = btb_response.speculative_id;
+        entry->btb_prediction_valid = true;
+        entry->btb_prediction_taken = btb_response.taken;
+        entry->btb_prediction_sign = ftq_base_sign;
+        entry->btb_prediction_target = btb_response.target;
+        if (btb_response.sign.type == CFI_BRA && btb_response.tage_used) {
+            entry->tage_prediction_valid = true;
+            entry->tage_prediction_taken = btb_response.taken;
+            entry->tage_prediction_sign = ftq_base_sign;
+        }
     }
 
     return btb_response;
@@ -333,6 +343,10 @@ bpu::run_bpu3(bpu_addr_t pc, const btb_response_t& bpu2_response,
             fetch_span_through_taken_2b(bpu2_response.sign),
             entry->consumed_span_2b);
         entry->jalr_fail = false;
+        entry->btb_prediction_valid = true;
+        entry->btb_prediction_taken = true;
+        entry->btb_prediction_sign = make_ftq_base_sign(bpu2_response.sign);
+        entry->btb_prediction_target = ittage_response.target;
 
         if (!needs_late_redirect) {
             return redirect;

@@ -292,7 +292,17 @@ class Fetch
      * @param next_NPC Used for ISAs which use delay slots.
      * @return Whether or not a branch was predicted as taken.
      */
+    struct DominantLineBtbEntry;
+
     bool lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &pc);
+    bool lookupAndUpdateNextPCDominantLine(const DynInstPtr &inst,
+                                           PCStateBase &pc);
+    void recordDominantLineBranch(const DynInstPtr &inst, Addr line_base,
+                                  unsigned offset_2b);
+    void commitDominantLineBranches(ThreadID tid, InstSeqNum done_seq);
+    void squashDominantLineBranches(ThreadID tid, InstSeqNum done_seq);
+    const DominantLineBtbEntry* lookupDominantLineBtb(Addr line_base) const;
+    void updateDominantLineBtb(Addr line_base, unsigned offset_2b);
 
     /**
      * Fetches the cache line that contains the fetch PC.  Returns any
@@ -343,6 +353,7 @@ class Fetch
 
     void tickDecoupledBPU(ThreadID tid);
     void pumpDecoupledBPU(ThreadID tid, unsigned budget);
+    void refillDecoupledBPU(ThreadID tid);
     bool decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr);
     void recoverDecoupledBPU(ThreadID tid, const PCStateBase &new_pc,
                              const DynInstPtr &squashInst,
@@ -363,11 +374,16 @@ class Fetch
                                     const DynInstPtr &inst) const;
     void clearDecoupledBPUJalrStall(ThreadID tid);
     bool consumeDecoupledFTQCacheBlock(ThreadID tid, Addr fetch_addr);
+    void accountFetchBankSpan(Addr start, Addr end);
+    void copyFetchLine(ThreadID tid, const PacketPtr pkt);
     bool checkDecoupledBPUPredecode(ThreadID tid, const DynInstPtr &inst,
                                     PCStateBase &next_pc);
     bpu_cycle_input_t makeDecoupledBPUInput(ThreadID tid, Addr base) const;
     void sampleDecoupledBPUOutput(ThreadID tid,
                                   const bpu_cycle_output_t &output);
+    struct DecoupledBpuPendingCommit;
+    void sampleDecoupledBPUCommitAccuracy(
+        const DecoupledBpuPendingCommit &entry);
     void recordDecoupledBPUCommitInfo(ThreadID tid, const DynInstPtr &inst);
     void updateDecoupledBPUMispredictCommitInfo(
         ThreadID tid, const DynInstPtr &inst, bool branch_taken,
@@ -408,7 +424,14 @@ class Fetch
     /** Align a PC to the start of a fetch buffer block. */
     Addr fetchBufferAlignPC(Addr addr)
     {
-        return (addr & ~(fetchBufferMask));
+        return (addr & ~(fetchBankAlignMask));
+    }
+
+    bool fetchBufferContains(ThreadID tid, Addr addr) const
+    {
+        return fetchBufferValid[tid] &&
+            addr >= fetchBufferPC[tid] &&
+            addr < fetchBufferPC[tid] + fetchBufferValidSize[tid];
     }
 
     /** The decoder. */
@@ -473,21 +496,37 @@ class Fetch
     bool decoupledBPUUseTAGE;
     bool decoupledBPUUseRAS;
     bool decoupledBPUUseITTAGE;
+    unsigned decoupledBPUVersion;
     unsigned decoupledBPUBurstTicks;
+    bool decoupledBPURefillOnFTQEmpty;
     unsigned decoupledBPUBanks;
     unsigned decoupledBPUFTQDepth;
     unsigned decoupledBPUUBTBEntries;
+    unsigned decoupledBPUTagWidth;
     unsigned decoupledBPUBTBWays;
     unsigned decoupledBPUBTBSets;
+    unsigned decoupledBPUABTBEntries;
+    unsigned decoupledBPUABTBBanks;
+    unsigned decoupledBPUSBTBWays;
+    unsigned decoupledBPUSBTBSets;
+    unsigned decoupledBPUSBTBBanks;
     unsigned decoupledBPUTTWays;
     unsigned decoupledBPUTTSets;
-    std::unique_ptr<::bpu> decoupledBpus[MaxThreads];
+    std::unique_ptr<::bpu_base> decoupledBpus[MaxThreads];
     std::unique_ptr<::cfi_tracer> decoupledBPUTracers[MaxThreads];
     int decoupledBPULastSpeculativeId[MaxThreads];
     bool decoupledBPUFtqFullLastCycle[MaxThreads];
     bool decoupledBPUJalrStall[MaxThreads];
     InstSeqNum decoupledBPUJalrStallSeqNum[MaxThreads];
     Addr decoupledBPUJalrStallPC[MaxThreads];
+
+    struct DecoupledBpuStagePrediction
+    {
+        bool valid = false;
+        bool taken = false;
+        bpu_sign_t sign;
+        Addr target = 0;
+    };
 
     struct DecoupledBpuFetchPredictionSegment
     {
@@ -500,6 +539,10 @@ class Fetch
         Addr target = 0;
         bool jalrFail = false;
         int speculativeId = -1;
+        DecoupledBpuStagePrediction abtbPrediction;
+        DecoupledBpuStagePrediction sbtbPrediction;
+        DecoupledBpuStagePrediction btbPrediction;
+        DecoupledBpuStagePrediction tagePrediction;
     };
 
     std::vector<DecoupledBpuFetchPredictionSegment>
@@ -510,10 +553,42 @@ class Fetch
         bool valid = false;
         InstSeqNum seqNum = 0;
         bpu_commit_update_t update;
+        bool accuracyOnly = false;
+        Addr entryBase = 0;
+        int actualEntryOffset2B = 0;
+        cfi_type_t actualType = CFI_NULL;
+        bool actualCompressed = false;
+        bool actualIsCall = false;
+        DecoupledBpuStagePrediction abtbPrediction;
+        DecoupledBpuStagePrediction sbtbPrediction;
+        DecoupledBpuStagePrediction btbPrediction;
+        DecoupledBpuStagePrediction tagePrediction;
     };
 
     std::deque<DecoupledBpuPendingCommit>
         decoupledBPUPendingCommits[MaxThreads];
+
+    bool dominantLinePredictorEnabled;
+    unsigned dominantLineBtbEntries;
+
+    struct DominantLineBtbEntry
+    {
+        bool valid = false;
+        Addr tag = 0;
+        unsigned dominantOffset2B = 0;
+        unsigned confidence = 0;
+    };
+
+    struct DominantLinePendingBranch
+    {
+        InstSeqNum seqNum = 0;
+        Addr lineBase = 0;
+        unsigned offset2B = 0;
+    };
+
+    std::vector<DominantLineBtbEntry> dominantLineBtb;
+    std::deque<DominantLinePendingBranch>
+        dominantLinePendingBranches[MaxThreads];
 
     std::unique_ptr<PCStateBase> pc[MaxThreads];
 
@@ -526,6 +601,9 @@ class Fetch
 
     /** Memory request used to access cache. */
     RequestPtr memReq[MaxThreads];
+
+    /** Non-blocking second line request for bank-aligned fetch windows. */
+    RequestPtr secondaryMemReq[MaxThreads];
 
     /** Variable that tracks if fetch has written to the time buffer this
      * cycle. Used to tell CPU if there is activity this cycle.
@@ -583,11 +661,21 @@ class Fetch
     /** Mask to align a fetch address to a fetch buffer boundary. */
     Addr fetchBufferMask;
 
+    /** Fetch-buffer alignment used by the banked frontend model. */
+    unsigned fetchBankAlignBytes;
+    Addr fetchBankAlignMask;
+
     /** The fetch data that is being fetched and buffered. */
     uint8_t *fetchBuffer[MaxThreads];
 
     /** The PC of the first instruction loaded into the fetch buffer. */
     Addr fetchBufferPC[MaxThreads];
+
+    /** Number of contiguous valid bytes from fetchBufferPC. */
+    unsigned fetchBufferValidSize[MaxThreads];
+
+    /** Whether the optional second line has already filled the buffer. */
+    bool fetchBufferSecondaryFilled[MaxThreads];
 
     /** The size of the fetch queue in micro-ops */
     unsigned fetchQueueSize;
@@ -666,6 +754,22 @@ class Fetch
         statistics::Scalar icacheWaitRetryStallCycles;
         /** Stat for total number of fetched cache lines. */
         statistics::Scalar cacheLines;
+        /** Fetch-buffer request starts by 16-byte offset within a cache
+         * line. */
+        statistics::Vector fetchBufferStartOffsetDist;
+        /** FTQ spans accepted by fetch, grouped by start offset in a line. */
+        statistics::Vector decoupledBpuFtqIcacheStartOffsetDist;
+        /** FTQ span bank touches accepted by fetch, grouped by line offset. */
+        statistics::Vector decoupledBpuFtqIcacheReadBankDist;
+        statistics::Scalar dominantLineBtbLookups;
+        statistics::Scalar dominantLineBtbHits;
+        statistics::Scalar dominantLineBtbMisses;
+        statistics::Scalar dominantLineBtbPredictions;
+        statistics::Scalar dominantLineBtbTakenPredictions;
+        statistics::Scalar dominantLineBtbSuppressedBranches;
+        statistics::Scalar dominantLineBtbUpdates;
+        statistics::Scalar dominantLineBtbReplacements;
+        statistics::Scalar dominantLineBtbDominantChanges;
         /** Total number of outstanding icache accesses that were dropped
          * due to a squash.
          */
@@ -684,10 +788,43 @@ class Fetch
         statistics::Scalar decoupledBpuFtqFullOnTick;
         statistics::Scalar decoupledBpuFtqPushes;
         statistics::Scalar decoupledBpuFtqConsumes;
+        statistics::Scalar decoupledBpuAbtbHits;
+        statistics::Scalar decoupledBpuAbtbMisses;
+        statistics::Scalar decoupledBpuSbtbHits;
+        statistics::Scalar decoupledBpuSbtbMisses;
         statistics::Scalar decoupledBpuUbtbHits;
         statistics::Scalar decoupledBpuUbtbMisses;
         statistics::Scalar decoupledBpuBtbHits;
         statistics::Scalar decoupledBpuBtbMisses;
+        statistics::Scalar decoupledBpuAbtbCorrectNoPrediction;
+        statistics::Scalar decoupledBpuAbtbCorrectPrediction;
+        statistics::Scalar decoupledBpuAbtbMissNoPrediction;
+        statistics::Scalar decoupledBpuAbtbMissFalseCfi;
+        statistics::Scalar decoupledBpuAbtbMissWrongCfi;
+        statistics::Scalar decoupledBpuAbtbMissWrongDirection;
+        statistics::Scalar decoupledBpuAbtbMissWrongTarget;
+        statistics::Scalar decoupledBpuSbtbCorrectNoPrediction;
+        statistics::Scalar decoupledBpuSbtbCorrectPrediction;
+        statistics::Scalar decoupledBpuSbtbMissNoPrediction;
+        statistics::Scalar decoupledBpuSbtbMissFalseCfi;
+        statistics::Scalar decoupledBpuSbtbMissWrongCfi;
+        statistics::Scalar decoupledBpuSbtbMissWrongDirection;
+        statistics::Scalar decoupledBpuSbtbMissWrongTarget;
+        statistics::Scalar decoupledBpuBtbCorrectNoPrediction;
+        statistics::Scalar decoupledBpuBtbCorrectPrediction;
+        statistics::Scalar decoupledBpuBtbMissNoPrediction;
+        statistics::Scalar decoupledBpuBtbMissFalseCfi;
+        statistics::Scalar decoupledBpuBtbMissWrongCfi;
+        statistics::Scalar decoupledBpuBtbMissWrongDirection;
+        statistics::Scalar decoupledBpuBtbMissWrongTarget;
+        statistics::Scalar decoupledBpuTageCorrectNoPrediction;
+        statistics::Scalar decoupledBpuTageCorrectPrediction;
+        statistics::Scalar decoupledBpuTageMissNoPrediction;
+        statistics::Scalar decoupledBpuTageMissFalseCfi;
+        statistics::Scalar decoupledBpuTageMissWrongCfi;
+        statistics::Scalar decoupledBpuTageMissWrongDirection;
+        statistics::Scalar decoupledBpuTageAccuracyHits;
+        statistics::Scalar decoupledBpuTageAccuracyMisses;
         statistics::Scalar decoupledBpuTageHits;
         statistics::Scalar decoupledBpuTageMisses;
         statistics::Scalar decoupledBpuTTHits;

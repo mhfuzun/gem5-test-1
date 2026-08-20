@@ -16,6 +16,7 @@ class cfi_tracer
         {
             bpu_sign_t sign;
             bpu_addr_t target = 0;
+            bpu_addr_t next_cfi_addr = 0;
             int next_cfi_span_2b = 0;
             InstSeqNum seq_num = 0;
         };

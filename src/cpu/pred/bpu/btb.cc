@@ -294,6 +294,7 @@ btb::predict(bpu_addr_t pc, tage_response_t tage_response,
                     response.valid = true;
                     response.taken = true;
                     response.target = entry->target;
+                    response.next_cfi_addr = entry->taken_next_cfi_addr;
                     response.next_cfi_span_2b =
                         entry->taken_next_cfi_span_2b;
                     response.sign = fetch_block_sign;
@@ -309,6 +310,8 @@ btb::predict(bpu_addr_t pc, tage_response_t tage_response,
 
                 fallthrough_response.valid = true;
                 fallthrough_response.taken = false;
+                fallthrough_response.next_cfi_addr =
+                    entry->fallthrough_next_cfi_addr;
                 fallthrough_response.next_cfi_span_2b =
                     entry->fallthrough_next_cfi_span_2b;
                 fallthrough_response.sign = fetch_block_sign;
@@ -323,6 +326,7 @@ btb::predict(bpu_addr_t pc, tage_response_t tage_response,
                 response.valid = true;
                 response.taken = true;
                 response.target = entry->target;
+                response.next_cfi_addr = entry->taken_next_cfi_addr;
                 response.next_cfi_span_2b =
                     entry->taken_next_cfi_span_2b;
                 response.sign = fetch_block_sign;
@@ -338,6 +342,7 @@ btb::predict(bpu_addr_t pc, tage_response_t tage_response,
                 response.valid = true;
                 response.taken = bank_tt.hit;
                 response.target = bank_tt.target;
+                response.next_cfi_addr = entry->taken_next_cfi_addr;
                 response.next_cfi_span_2b =
                     entry->taken_next_cfi_span_2b;
                 response.sign = fetch_block_sign;
@@ -348,6 +353,7 @@ btb::predict(bpu_addr_t pc, tage_response_t tage_response,
                 response.valid = true;
                 response.taken = ras_response.valid;
                 response.target = ras_response.target;
+                response.next_cfi_addr = entry->taken_next_cfi_addr;
                 response.next_cfi_span_2b =
                     entry->taken_next_cfi_span_2b;
                 response.sign = fetch_block_sign;
@@ -590,6 +596,7 @@ btb::make_ubtb_entry(bpu_addr_t cfi_addr,
         btb_response.valid && btb_response.taken && btb_response.ubtb_fillable;
     ubtb_entry.target = btb_response.target;
     ubtb_entry.cfi_sign = btb_response.sign;
+    ubtb_entry.next_cfi_addr = btb_response.next_cfi_addr;
     ubtb_entry.next_cfi_span_2b = btb_response.next_cfi_span_2b;
     return ubtb_entry;
 }

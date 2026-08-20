@@ -46,6 +46,7 @@
 #include <list>
 #include <map>
 #include <queue>
+#include <string>
 
 #include "arch/generic/tlb.hh"
 #include "base/types.hh"
@@ -55,6 +56,7 @@
 #include "cpu/o3/cpu.hh"
 #include "cpu/o3/dyn_inst.hh"
 #include "cpu/o3/limits.hh"
+#include "cpu/pred/bpu/bpu_v2.hh"
 #include "debug/Activity.hh"
 #include "debug/DecoupledBPU.hh"
 #include "debug/Drain.hh"
@@ -157,14 +159,24 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
       decoupledBPUUseTAGE(params.decoupledBPUUseTAGE),
       decoupledBPUUseRAS(params.decoupledBPUUseRAS),
       decoupledBPUUseITTAGE(params.decoupledBPUUseITTAGE),
+      decoupledBPUVersion(params.decoupledBPUVersion),
       decoupledBPUBurstTicks(std::max(1U, params.decoupledBPUBurstTicks)),
+      decoupledBPURefillOnFTQEmpty(params.decoupledBPURefillOnFTQEmpty),
       decoupledBPUBanks(params.decoupledBPUBanks),
       decoupledBPUFTQDepth(params.decoupledBPUFTQDepth),
       decoupledBPUUBTBEntries(params.decoupledBPUUBTBEntries),
+      decoupledBPUTagWidth(params.decoupledBPUTagWidth),
       decoupledBPUBTBWays(params.decoupledBPUBTBWays),
       decoupledBPUBTBSets(params.decoupledBPUBTBSets),
+      decoupledBPUABTBEntries(params.decoupledBPUABTBEntries),
+      decoupledBPUABTBBanks(params.decoupledBPUABTBBanks),
+      decoupledBPUSBTBWays(params.decoupledBPUSBTBWays),
+      decoupledBPUSBTBSets(params.decoupledBPUSBTBSets),
+      decoupledBPUSBTBBanks(params.decoupledBPUSBTBBanks),
       decoupledBPUTTWays(params.decoupledBPUTTWays),
       decoupledBPUTTSets(params.decoupledBPUTTSets),
+      dominantLinePredictorEnabled(params.dominantLinePredictor),
+      dominantLineBtbEntries(params.dominantLineBtbEntries),
       decodeToFetchDelay(params.decodeToFetchDelay),
       renameToFetchDelay(params.renameToFetchDelay),
       iewToFetchDelay(params.iewToFetchDelay),
@@ -176,6 +188,8 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
       cacheBlkSize(cpu->cacheLineSize()),
       fetchBufferSize(params.fetchBufferSize),
       fetchBufferMask(fetchBufferSize - 1),
+      fetchBankAlignBytes(params.fetchBankAlignBytes),
+      fetchBankAlignMask(fetchBankAlignBytes - 1),
       fetchQueueSize(params.fetchQueueSize),
       numThreads(params.numThreads),
       numFetchingThreads(params.smtNumFetchingThreads),
@@ -196,6 +210,36 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
     if (cacheBlkSize % fetchBufferSize)
         fatal("cache block (%u bytes) is not a multiple of the "
               "fetch buffer (%u bytes)\n", cacheBlkSize, fetchBufferSize);
+    if (fetchBufferSize != cacheBlkSize) {
+        fatal("fetchBankAlignBytes model requires fetchBufferSize (%u) to "
+              "match cache block size (%u)\n", fetchBufferSize, cacheBlkSize);
+    }
+    if (fetchBankAlignBytes == 0 ||
+        (fetchBankAlignBytes & (fetchBankAlignBytes - 1)) != 0 ||
+        fetchBankAlignBytes > fetchBufferSize ||
+        fetchBufferSize % fetchBankAlignBytes != 0) {
+        fatal("fetchBankAlignBytes (%u) must be a power-of-two divisor of "
+              "fetchBufferSize (%u)\n", fetchBankAlignBytes, fetchBufferSize);
+    }
+    if (dominantLinePredictorEnabled) {
+        if (decoupledBPUEnabled) {
+            fatal("dominantLinePredictor requires decoupledBPU disabled\n");
+        }
+        if (cacheBlkSize != 64 || fetchBufferSize != 64) {
+            fatal("dominantLinePredictor requires 64-byte cache lines and "
+                  "64-byte fetch buffers; got cache block %u and fetch "
+                  "buffer %u\n", cacheBlkSize, fetchBufferSize);
+        }
+        if (fetchBankAlignBytes != cacheBlkSize) {
+            fatal("dominantLinePredictor requires cache-line-aligned fetch "
+                  "windows: fetchBankAlignBytes (%u) must match cache block "
+                  "size (%u)\n", fetchBankAlignBytes, cacheBlkSize);
+        }
+        if (dominantLineBtbEntries == 0) {
+            fatal("dominantLineBtbEntries must be non-zero\n");
+        }
+        dominantLineBtb.resize(dominantLineBtbEntries);
+    }
 
     for (int i = 0; i < MaxThreads; i++) {
         fetchStatus[i] = Idle;
@@ -205,10 +249,13 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
         macroop[i] = nullptr;
         delayedCommit[i] = false;
         memReq[i] = nullptr;
+        secondaryMemReq[i] = nullptr;
         stalls[i] = {false, false};
         fetchBuffer[i] = NULL;
         fetchBufferPC[i] = 0;
         fetchBufferValid[i] = false;
+        fetchBufferValidSize[i] = 0;
+        fetchBufferSecondaryFilled[i] = false;
         lastIcacheStall[i] = 0;
         issuePipelinedIfetch[i] = false;
         decoupledBPULastSpeculativeId[i] = -1;
@@ -227,6 +274,18 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
                   "count (%d)\n",
                   decoupledBPUBanks, bpu_cfg::fetch_block_2b_count);
         }
+        decoupledBPUABTBBanks = std::max(1U, decoupledBPUABTBBanks);
+        if (bpu_cfg::fetch_block_2b_count % decoupledBPUABTBBanks != 0) {
+            fatal("decoupledBPUABTBBanks (%u) must divide fetch block "
+                  "halfword count (%d)\n",
+                  decoupledBPUABTBBanks, bpu_cfg::fetch_block_2b_count);
+        }
+        decoupledBPUSBTBBanks = std::max(1U, decoupledBPUSBTBBanks);
+        if (bpu_cfg::fetch_block_2b_count % decoupledBPUSBTBBanks != 0) {
+            fatal("decoupledBPUSBTBBanks (%u) must divide fetch block "
+                  "halfword count (%d)\n",
+                  decoupledBPUSBTBBanks, bpu_cfg::fetch_block_2b_count);
+        }
     }
 
     for (ThreadID tid = 0; tid < numThreads; tid++) {
@@ -238,31 +297,59 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
         if (decoupledBPUEnabled) {
             ubtb_cfg ubtbCfg;
             ubtbCfg.way_count = std::max(1U, decoupledBPUUBTBEntries);
-            ubtbCfg.tag_width = 16;
+            ubtbCfg.tag_width = std::max(1U, decoupledBPUTagWidth);
             ubtbCfg.tag_pc_shift = 1;
 
             btb_cfg btbCfg;
             btbCfg.way_count = std::max(1U, decoupledBPUBTBWays);
             btbCfg.set_count = std::max(1U, decoupledBPUBTBSets);
             btbCfg.bank_count = decoupledBPUBanks;
-            btbCfg.tag_width = 16;
+            btbCfg.tag_width = std::max(1U, decoupledBPUTagWidth);
             btbCfg.tag_pc_shift = 1;
 
             tt_cfg ttCfg;
             ttCfg.way_count = std::max(1U, decoupledBPUTTWays);
             ttCfg.set_count = std::max(1U, decoupledBPUTTSets);
             ttCfg.bank_count = decoupledBPUBanks;
-            ttCfg.tag_width = 16;
+            ttCfg.tag_width = std::max(1U, decoupledBPUTagWidth);
             ttCfg.tag_pc_shift = 1;
 
             ftq_cfg ftqCfg;
             ftqCfg.depth = std::max(1U, decoupledBPUFTQDepth);
 
-            decoupledBpus[tid] =
-                std::make_unique<::bpu>(
-                    btbCfg, ubtbCfg, ttCfg, ftqCfg,
-                    decoupledBPUUseTAGE, decoupledBPUUseRAS,
-                    decoupledBPUUseITTAGE);
+            if (decoupledBPUVersion == 1) {
+                decoupledBpus[tid] =
+                    std::make_unique<::bpu>(
+                        btbCfg, ubtbCfg, ttCfg, ftqCfg,
+                        decoupledBPUUseTAGE, decoupledBPUUseRAS,
+                        decoupledBPUUseITTAGE);
+            } else if (decoupledBPUVersion == 2) {
+                sbtb_cfg sbtbCfg;
+                sbtbCfg.way_count = std::max(1U, decoupledBPUSBTBWays);
+                sbtbCfg.set_count = std::max(1U, decoupledBPUSBTBSets);
+                sbtbCfg.bank_count = decoupledBPUSBTBBanks;
+                sbtbCfg.tag_width = std::max(1U, decoupledBPUTagWidth);
+                sbtbCfg.tag_pc_shift = 1;
+
+                abtb_cfg abtbCfg;
+                abtbCfg.bank_count = decoupledBPUABTBBanks;
+                abtbCfg.set_count = std::max(
+                    1U,
+                    (std::max(1U, decoupledBPUABTBEntries) +
+                     decoupledBPUABTBBanks - 1) /
+                        decoupledBPUABTBBanks);
+                abtbCfg.tag_width = std::max(1U, decoupledBPUTagWidth);
+                abtbCfg.tag_pc_shift = 1;
+
+                decoupledBpus[tid] =
+                    std::make_unique<::bpu_v2>(
+                        btbCfg, sbtbCfg, ttCfg, ftqCfg,
+                        decoupledBPUUseTAGE, decoupledBPUUseRAS,
+                        decoupledBPUUseITTAGE, abtbCfg);
+            } else {
+                fatal("decoupledBPUVersion (%u) must be 1 or 2",
+                      decoupledBPUVersion);
+            }
             decoupledBPUTracers[tid] = std::make_unique<::cfi_tracer>(
                 std::max(64U, decoupledBPUFTQDepth * 4),
                 decoupledBPUBanks);
@@ -314,6 +401,40 @@ Fetch::FetchStatGroup::FetchStatGroup(CPU *cpu, Fetch *fetch)
              "Number of stall cycles due to full MSHR"),
     ADD_STAT(cacheLines, statistics::units::Count::get(),
              "Number of cache lines fetched"),
+    ADD_STAT(fetchBufferStartOffsetDist, statistics::units::Count::get(),
+             "Fetch-buffer request start counts by 16-byte offset within a "
+             "cache line"),
+    ADD_STAT(decoupledBpuFtqIcacheStartOffsetDist,
+             statistics::units::Count::get(),
+             "FTQ spans accepted by fetch, by starting 16-byte offset within "
+             "a cache line"),
+    ADD_STAT(decoupledBpuFtqIcacheReadBankDist,
+             statistics::units::Count::get(),
+             "FTQ spans accepted by fetch, counted once for each touched "
+             "16-byte bank within a cache line"),
+    ADD_STAT(dominantLineBtbLookups, statistics::units::Count::get(),
+             "Line-dominant BTB lookups for decoded control instructions"),
+    ADD_STAT(dominantLineBtbHits, statistics::units::Count::get(),
+             "Line-dominant BTB lookups that matched the cache-line tag"),
+    ADD_STAT(dominantLineBtbMisses, statistics::units::Count::get(),
+             "Line-dominant BTB lookups that missed the cache-line tag"),
+    ADD_STAT(dominantLineBtbPredictions, statistics::units::Count::get(),
+             "Branches selected by the line-dominant BTB for a real "
+             "direction prediction"),
+    ADD_STAT(dominantLineBtbTakenPredictions, statistics::units::Count::get(),
+             "Line-dominant BTB-selected branches predicted taken"),
+    ADD_STAT(dominantLineBtbSuppressedBranches,
+             statistics::units::Count::get(),
+             "Control instructions forced not taken because they were not "
+             "the dominant branch in their fetch line"),
+    ADD_STAT(dominantLineBtbUpdates, statistics::units::Count::get(),
+             "Committed control instructions used to update the "
+             "line-dominant BTB"),
+    ADD_STAT(dominantLineBtbReplacements, statistics::units::Count::get(),
+             "Line-dominant BTB direct-mapped tag replacements"),
+    ADD_STAT(dominantLineBtbDominantChanges,
+             statistics::units::Count::get(),
+             "Line-dominant BTB entries whose dominant offset changed"),
     ADD_STAT(icacheSquashes, statistics::units::Count::get(),
              "Number of outstanding Icache misses that were squashed"),
     ADD_STAT(tlbSquashes, statistics::units::Count::get(),
@@ -341,15 +462,100 @@ Fetch::FetchStatGroup::FetchStatGroup(CPU *cpu, Fetch *fetch)
              "Number of entries pushed into the experimental FTQ"),
     ADD_STAT(decoupledBpuFtqConsumes, statistics::units::Count::get(),
              "Number of experimental FTQ spans consumed by fetch buffers"),
+    ADD_STAT(decoupledBpuAbtbHits, statistics::units::Count::get(),
+             "BPU v2 ABTB predictions verified correct at commit"),
+    ADD_STAT(decoupledBpuAbtbMisses, statistics::units::Count::get(),
+             "BPU v2 ABTB predictions verified wrong at commit"),
+    ADD_STAT(decoupledBpuSbtbHits, statistics::units::Count::get(),
+             "BPU v2 SBTB predictions verified correct at commit"),
+    ADD_STAT(decoupledBpuSbtbMisses, statistics::units::Count::get(),
+             "BPU v2 SBTB predictions verified wrong at commit"),
     ADD_STAT(decoupledBpuUbtbHits, statistics::units::Count::get(),
              "Experimental uBTB taken-CFI answers verified by BTB"),
     ADD_STAT(decoupledBpuUbtbMisses, statistics::units::Count::get(),
              "Experimental uBTB missing or mismatching BTB-fillable "
              "taken CFIs"),
     ADD_STAT(decoupledBpuBtbHits, statistics::units::Count::get(),
-             "Experimental BTB hits for decoded taken CFIs"),
+             "Experimental BTB/BPU3 predictions verified correct at commit"),
     ADD_STAT(decoupledBpuBtbMisses, statistics::units::Count::get(),
-             "Experimental BTB misses for decoded taken CFIs"),
+             "Experimental BTB/BPU3 predictions verified wrong at commit"),
+    ADD_STAT(decoupledBpuAbtbCorrectNoPrediction,
+             statistics::units::Count::get(),
+             "ABTB hit: no taken prediction and no taken CFI at commit"),
+    ADD_STAT(decoupledBpuAbtbCorrectPrediction,
+             statistics::units::Count::get(),
+             "ABTB hit: taken prediction matched commit outcome"),
+    ADD_STAT(decoupledBpuAbtbMissNoPrediction,
+             statistics::units::Count::get(),
+             "ABTB miss: no taken prediction for a taken CFI"),
+    ADD_STAT(decoupledBpuAbtbMissFalseCfi, statistics::units::Count::get(),
+             "ABTB miss: predicted a CFI where commit saw none"),
+    ADD_STAT(decoupledBpuAbtbMissWrongCfi, statistics::units::Count::get(),
+             "ABTB miss: predicted the wrong CFI offset/type"),
+    ADD_STAT(decoupledBpuAbtbMissWrongDirection,
+             statistics::units::Count::get(),
+             "ABTB miss: predicted taken but commit outcome was not taken"),
+    ADD_STAT(decoupledBpuAbtbMissWrongTarget,
+             statistics::units::Count::get(),
+             "ABTB miss: predicted taken target mismatched commit target"),
+    ADD_STAT(decoupledBpuSbtbCorrectNoPrediction,
+             statistics::units::Count::get(),
+             "SBTB hit: no taken prediction and no taken CFI at commit"),
+    ADD_STAT(decoupledBpuSbtbCorrectPrediction,
+             statistics::units::Count::get(),
+             "SBTB hit: taken prediction matched commit outcome"),
+    ADD_STAT(decoupledBpuSbtbMissNoPrediction,
+             statistics::units::Count::get(),
+             "SBTB miss: no taken prediction for a taken CFI"),
+    ADD_STAT(decoupledBpuSbtbMissFalseCfi, statistics::units::Count::get(),
+             "SBTB miss: predicted a CFI where commit saw none"),
+    ADD_STAT(decoupledBpuSbtbMissWrongCfi, statistics::units::Count::get(),
+             "SBTB miss: predicted the wrong CFI offset/type"),
+    ADD_STAT(decoupledBpuSbtbMissWrongDirection,
+             statistics::units::Count::get(),
+             "SBTB miss: predicted taken but commit outcome was not taken"),
+    ADD_STAT(decoupledBpuSbtbMissWrongTarget,
+             statistics::units::Count::get(),
+             "SBTB miss: predicted taken target mismatched commit target"),
+    ADD_STAT(decoupledBpuBtbCorrectNoPrediction,
+             statistics::units::Count::get(),
+             "BTB hit: no prediction and no CFI at commit"),
+    ADD_STAT(decoupledBpuBtbCorrectPrediction,
+             statistics::units::Count::get(),
+             "BTB hit: prediction matched commit CFI/direction/target"),
+    ADD_STAT(decoupledBpuBtbMissNoPrediction,
+             statistics::units::Count::get(),
+             "BTB miss: no prediction for a committed CFI"),
+    ADD_STAT(decoupledBpuBtbMissFalseCfi, statistics::units::Count::get(),
+             "BTB miss: predicted a CFI where commit saw none"),
+    ADD_STAT(decoupledBpuBtbMissWrongCfi, statistics::units::Count::get(),
+             "BTB miss: predicted the wrong CFI offset/type"),
+    ADD_STAT(decoupledBpuBtbMissWrongDirection,
+             statistics::units::Count::get(),
+             "BTB miss: predicted the wrong branch direction"),
+    ADD_STAT(decoupledBpuBtbMissWrongTarget,
+             statistics::units::Count::get(),
+             "BTB miss: predicted taken target mismatched commit target"),
+    ADD_STAT(decoupledBpuTageCorrectNoPrediction,
+             statistics::units::Count::get(),
+             "TAGE hit: no TAGE prediction for non-branch sampled point"),
+    ADD_STAT(decoupledBpuTageCorrectPrediction,
+             statistics::units::Count::get(),
+             "TAGE hit: branch direction prediction matched commit"),
+    ADD_STAT(decoupledBpuTageMissNoPrediction,
+             statistics::units::Count::get(),
+             "TAGE miss: no TAGE prediction for a committed branch"),
+    ADD_STAT(decoupledBpuTageMissFalseCfi, statistics::units::Count::get(),
+             "TAGE miss: predicted a branch where commit saw no branch"),
+    ADD_STAT(decoupledBpuTageMissWrongCfi, statistics::units::Count::get(),
+             "TAGE miss: predicted the wrong branch offset/type"),
+    ADD_STAT(decoupledBpuTageMissWrongDirection,
+             statistics::units::Count::get(),
+             "TAGE miss: predicted the wrong branch direction"),
+    ADD_STAT(decoupledBpuTageAccuracyHits, statistics::units::Count::get(),
+             "TAGE direction predictions verified correct at commit"),
+    ADD_STAT(decoupledBpuTageAccuracyMisses, statistics::units::Count::get(),
+             "TAGE direction predictions verified wrong at commit"),
     ADD_STAT(decoupledBpuTageHits, statistics::units::Count::get(),
              "Experimental TAGE-side branch direction lookups used"),
     ADD_STAT(decoupledBpuTageMisses, statistics::units::Count::get(),
@@ -432,6 +638,40 @@ Fetch::FetchStatGroup::FetchStatGroup(CPU *cpu, Fetch *fetch)
             .prereq(blockedCycles);
         cacheLines
             .prereq(cacheLines);
+        fetchBufferStartOffsetDist
+            .init(4)
+            .flags(statistics::total | statistics::pdf | statistics::dist);
+        decoupledBpuFtqIcacheStartOffsetDist
+            .init(4)
+            .flags(statistics::total | statistics::pdf | statistics::dist);
+        decoupledBpuFtqIcacheReadBankDist
+            .init(4)
+            .flags(statistics::total | statistics::pdf | statistics::dist);
+        dominantLineBtbLookups
+            .prereq(dominantLineBtbLookups);
+        dominantLineBtbHits
+            .prereq(dominantLineBtbHits);
+        dominantLineBtbMisses
+            .prereq(dominantLineBtbMisses);
+        dominantLineBtbPredictions
+            .prereq(dominantLineBtbPredictions);
+        dominantLineBtbTakenPredictions
+            .prereq(dominantLineBtbTakenPredictions);
+        dominantLineBtbSuppressedBranches
+            .prereq(dominantLineBtbSuppressedBranches);
+        dominantLineBtbUpdates
+            .prereq(dominantLineBtbUpdates);
+        dominantLineBtbReplacements
+            .prereq(dominantLineBtbReplacements);
+        dominantLineBtbDominantChanges
+            .prereq(dominantLineBtbDominantChanges);
+        for (unsigned i = 0; i < 4; ++i) {
+            const std::string name = std::to_string(i * 16) + "-" +
+                std::to_string(i * 16 + 15);
+            fetchBufferStartOffsetDist.subname(i, name);
+            decoupledBpuFtqIcacheStartOffsetDist.subname(i, name);
+            decoupledBpuFtqIcacheReadBankDist.subname(i, name);
+        }
         miscStallCycles
             .prereq(miscStallCycles);
         pendingDrainCycles
@@ -501,10 +741,13 @@ Fetch::clearStates(ThreadID tid)
     macroop[tid] = NULL;
     delayedCommit[tid] = false;
     memReq[tid] = NULL;
+    secondaryMemReq[tid] = NULL;
     stalls[tid].decode = false;
     stalls[tid].drain = false;
     fetchBufferPC[tid] = 0;
     fetchBufferValid[tid] = false;
+    fetchBufferValidSize[tid] = 0;
+    fetchBufferSecondaryFilled[tid] = false;
     fetchQueue[tid].clear();
     decoupledBPULastSpeculativeId[tid] = -1;
     decoupledBPUFtqFullLastCycle[tid] = false;
@@ -513,6 +756,7 @@ Fetch::clearStates(ThreadID tid)
     decoupledBPUJalrStallPC[tid] = 0;
     clearDecoupledBPUFetchPredictions(tid);
     decoupledBPUPendingCommits[tid].clear();
+    dominantLinePendingBranches[tid].clear();
     if (decoupledBPUTracers[tid]) {
         decoupledBPUTracers[tid]->clear();
     }
@@ -549,12 +793,15 @@ Fetch::resetStage()
 
         delayedCommit[tid] = false;
         memReq[tid] = NULL;
+        secondaryMemReq[tid] = NULL;
 
         stalls[tid].decode = false;
         stalls[tid].drain = false;
 
         fetchBufferPC[tid] = 0;
         fetchBufferValid[tid] = false;
+        fetchBufferValidSize[tid] = 0;
+        fetchBufferSecondaryFilled[tid] = false;
 
         fetchQueue[tid].clear();
         decoupledBPULastSpeculativeId[tid] = -1;
@@ -564,6 +811,7 @@ Fetch::resetStage()
         decoupledBPUJalrStallPC[tid] = 0;
         clearDecoupledBPUFetchPredictions(tid);
         decoupledBPUPendingCommits[tid].clear();
+        dominantLinePendingBranches[tid].clear();
         if (decoupledBPUTracers[tid]) {
             decoupledBPUTracers[tid]->clear();
         }
@@ -579,12 +827,45 @@ Fetch::resetStage()
 }
 
 void
+Fetch::copyFetchLine(ThreadID tid, const PacketPtr pkt)
+{
+    const Addr line_start = pkt->req->getVaddr();
+    const Addr line_end = line_start + cacheBlkSize;
+    const Addr window_start = fetchBufferPC[tid];
+    const Addr window_end = window_start + fetchBufferSize;
+    const Addr copy_start = std::max(line_start, window_start);
+    const Addr copy_end = std::min(line_end, window_end);
+
+    if (copy_start >= copy_end) {
+        return;
+    }
+
+    const unsigned dst_offset = copy_start - window_start;
+    const unsigned src_offset = copy_start - line_start;
+    const unsigned bytes = copy_end - copy_start;
+    memcpy(fetchBuffer[tid] + dst_offset,
+           pkt->getConstPtr<uint8_t>() + src_offset, bytes);
+}
+
+void
 Fetch::processCacheCompletion(PacketPtr pkt)
 {
     ThreadID tid = cpu->contextToThread(pkt->req->contextId());
+    const bool is_secondary = pkt->req == secondaryMemReq[tid];
 
     DPRINTF(Fetch, "[tid:%i] Waking up from cache miss.\n", tid);
     assert(!cpu->switchedOut());
+
+    if (is_secondary) {
+        copyFetchLine(tid, pkt);
+        secondaryMemReq[tid] = nullptr;
+        fetchBufferSecondaryFilled[tid] = true;
+        if (fetchBufferValid[tid]) {
+            fetchBufferValidSize[tid] = fetchBufferSize;
+        }
+        delete pkt;
+        return;
+    }
 
     // Only change the status if it's still waiting on the icache access
     // to return.
@@ -595,8 +876,15 @@ Fetch::processCacheCompletion(PacketPtr pkt)
         return;
     }
 
-    memcpy(fetchBuffer[tid], pkt->getConstPtr<uint8_t>(), fetchBufferSize);
+    copyFetchLine(tid, pkt);
     fetchBufferValid[tid] = true;
+    const Addr primary_end =
+        (fetchBufferPC[tid] & ~(cacheBlkSize - 1)) + cacheBlkSize;
+    fetchBufferValidSize[tid] =
+        std::min<Addr>(fetchBufferSize, primary_end - fetchBufferPC[tid]);
+    if (fetchBufferSecondaryFilled[tid]) {
+        fetchBufferValidSize[tid] = fetchBufferSize;
+    }
 
     // Wake up the CPU (if it went to sleep and was waiting on
     // this completion event).
@@ -740,6 +1028,10 @@ Fetch::deactivateThread(ThreadID tid)
 bool
 Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
 {
+    if (dominantLinePredictorEnabled) {
+        return lookupAndUpdateNextPCDominantLine(inst, next_pc);
+    }
+
     // Do branch prediction check here.
     // A bit of a misnomer...next_PC is actually the current PC until
     // this function updates it.
@@ -786,6 +1078,170 @@ Fetch::lookupAndUpdateNextPC(const DynInstPtr &inst, PCStateBase &next_pc)
     return predict_taken;
 }
 
+const Fetch::DominantLineBtbEntry*
+Fetch::lookupDominantLineBtb(Addr line_base) const
+{
+    assert(dominantLineBtbEntries != 0);
+    assert(!dominantLineBtb.empty());
+
+    const size_t index = (line_base / cacheBlkSize) %
+        dominantLineBtbEntries;
+    const DominantLineBtbEntry &entry = dominantLineBtb[index];
+    if (!entry.valid || entry.tag != line_base) {
+        return nullptr;
+    }
+
+    return &entry;
+}
+
+void
+Fetch::recordDominantLineBranch(const DynInstPtr &inst, Addr line_base,
+                                unsigned offset_2b)
+{
+    if (!dominantLinePredictorEnabled) {
+        return;
+    }
+
+    dominantLinePendingBranches[inst->threadNumber].push_back(
+        {inst->seqNum, line_base, offset_2b});
+}
+
+void
+Fetch::updateDominantLineBtb(Addr line_base, unsigned offset_2b)
+{
+    assert(dominantLineBtbEntries != 0);
+    const size_t index = (line_base / cacheBlkSize) %
+        dominantLineBtbEntries;
+    DominantLineBtbEntry &entry = dominantLineBtb[index];
+
+    ++fetchStats.dominantLineBtbUpdates;
+
+    if (!entry.valid || entry.tag != line_base) {
+        if (entry.valid) {
+            ++fetchStats.dominantLineBtbReplacements;
+        }
+        entry.valid = true;
+        entry.tag = line_base;
+        entry.dominantOffset2B = offset_2b;
+        entry.confidence = 1;
+        return;
+    }
+
+    if (entry.dominantOffset2B == offset_2b) {
+        entry.confidence = std::min(3U, entry.confidence + 1);
+        return;
+    }
+
+    if (entry.confidence == 0) {
+        entry.dominantOffset2B = offset_2b;
+        entry.confidence = 1;
+        ++fetchStats.dominantLineBtbDominantChanges;
+    } else {
+        entry.confidence--;
+    }
+}
+
+void
+Fetch::commitDominantLineBranches(ThreadID tid, InstSeqNum done_seq)
+{
+    if (!dominantLinePredictorEnabled || done_seq == 0) {
+        return;
+    }
+
+    auto &pending = dominantLinePendingBranches[tid];
+    while (!pending.empty() && pending.front().seqNum <= done_seq) {
+        const auto entry = pending.front();
+        pending.pop_front();
+        updateDominantLineBtb(entry.lineBase, entry.offset2B);
+    }
+}
+
+void
+Fetch::squashDominantLineBranches(ThreadID tid, InstSeqNum done_seq)
+{
+    if (!dominantLinePredictorEnabled) {
+        return;
+    }
+
+    auto &pending = dominantLinePendingBranches[tid];
+    while (!pending.empty() && pending.back().seqNum > done_seq) {
+        pending.pop_back();
+    }
+}
+
+bool
+Fetch::lookupAndUpdateNextPCDominantLine(const DynInstPtr &inst,
+                                         PCStateBase &next_pc)
+{
+    if (!inst->isControl()) {
+        inst->staticInst->advancePC(next_pc);
+        inst->setPredTarg(next_pc);
+        inst->setPredTaken(false);
+        return false;
+    }
+
+    const ThreadID tid = inst->threadNumber;
+    const Addr inst_addr = inst->pcState().instAddr();
+    const Addr line_base = inst_addr & ~(cacheBlkSize - 1);
+    const unsigned offset_2b = (inst_addr - line_base) >> 1;
+    recordDominantLineBranch(inst, line_base, offset_2b);
+
+    ++fetchStats.dominantLineBtbLookups;
+    const DominantLineBtbEntry *entry = lookupDominantLineBtb(line_base);
+
+    bool dominant_match = false;
+    if (entry) {
+        ++fetchStats.dominantLineBtbHits;
+        dominant_match = entry->dominantOffset2B == offset_2b;
+    } else {
+        ++fetchStats.dominantLineBtbMisses;
+    }
+
+    std::unique_ptr<PCStateBase> direct_target;
+    const PCStateBase *taken_target = nullptr;
+    if (dominant_match && inst->isDirectCtrl()) {
+        direct_target = inst->branchTarget();
+        taken_target = direct_target.get();
+    }
+
+    bool predict_taken = false;
+    if (dominant_match) {
+        ++fetchStats.dominantLineBtbPredictions;
+        predict_taken = branchPred->predictWithPC(
+            inst->staticInst, inst->seqNum, next_pc, tid, line_base,
+            taken_target);
+        if (predict_taken) {
+            ++fetchStats.dominantLineBtbTakenPredictions;
+        }
+    } else {
+        ++fetchStats.dominantLineBtbSuppressedBranches;
+        predict_taken = branchPred->predictNotTakenWithPC(
+            inst->staticInst, inst->seqNum, next_pc, tid, line_base);
+    }
+
+    if (predict_taken) {
+        DPRINTF(Fetch, "[tid:%i] [sn:%llu] Dominant-line branch at PC %#x "
+                "line %#x offset2B %u predicted taken to %s\n",
+                tid, inst->seqNum, inst_addr, line_base, offset_2b,
+                next_pc);
+    } else {
+        DPRINTF(Fetch, "[tid:%i] [sn:%llu] Dominant-line branch at PC %#x "
+                "line %#x offset2B %u predicted not taken\n",
+                tid, inst->seqNum, inst_addr, line_base, offset_2b);
+    }
+
+    inst->setPredTarg(next_pc);
+    inst->setPredTaken(predict_taken);
+
+    cpu->fetchStats[tid]->numBranches++;
+
+    if (predict_taken) {
+        ++fetchStats.predictedBranches;
+    }
+
+    return predict_taken;
+}
+
 bool
 Fetch::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
 {
@@ -811,6 +1267,9 @@ Fetch::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
 
     // Align the fetch address to the start of a fetch buffer segment.
     Addr fetchBufferBlockPC = fetchBufferAlignPC(vaddr);
+    const Addr firstLinePC = fetchBufferBlockPC & ~(cacheBlkSize - 1);
+    const Addr lastLinePC =
+        (fetchBufferBlockPC + fetchBufferSize - 1) & ~(cacheBlkSize - 1);
 
     DPRINTF(Fetch, "[tid:%i] Fetching cache line %#x for addr %#x\n",
             tid, fetchBufferBlockPC, vaddr);
@@ -819,19 +1278,40 @@ Fetch::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
     // Set the appropriate read size and flags as well.
     // Build request here.
     RequestPtr mem_req = std::make_shared<Request>(
-        fetchBufferBlockPC, fetchBufferSize,
+        firstLinePC, cacheBlkSize,
         Request::INST_FETCH, cpu->instRequestorId(), pc,
         cpu->thread[tid]->contextId());
 
     mem_req->taskId(cpu->taskId());
 
+    fetchBufferPC[tid] = fetchBufferBlockPC;
+    fetchBufferValid[tid] = false;
+    fetchBufferValidSize[tid] = 0;
+    fetchBufferSecondaryFilled[tid] = false;
     memReq[tid] = mem_req;
+    secondaryMemReq[tid] = nullptr;
+
+    RequestPtr secondary_mem_req = nullptr;
+    if (lastLinePC != firstLinePC) {
+        secondary_mem_req = std::make_shared<Request>(
+            lastLinePC, cacheBlkSize,
+            Request::INST_FETCH, cpu->instRequestorId(), pc,
+            cpu->thread[tid]->contextId());
+        secondary_mem_req->taskId(cpu->taskId());
+        secondaryMemReq[tid] = secondary_mem_req;
+    }
 
     // Initiate translation of the icache block
     fetchStatus[tid] = ItlbWait;
     FetchTranslation *trans = new FetchTranslation(this);
     cpu->mmu->translateTiming(mem_req, cpu->thread[tid]->getTC(),
                               trans, BaseMMU::Execute);
+    if (secondary_mem_req) {
+        FetchTranslation *secondary_trans = new FetchTranslation(this);
+        cpu->mmu->translateTiming(secondary_mem_req,
+                                  cpu->thread[tid]->getTC(),
+                                  secondary_trans, BaseMMU::Execute);
+    }
     return true;
 }
 
@@ -839,21 +1319,27 @@ void
 Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
 {
     ThreadID tid = cpu->contextToThread(mem_req->contextId());
-    Addr fetchBufferBlockPC = mem_req->getVaddr();
+    const bool is_primary = mem_req == memReq[tid];
+    const bool is_secondary = mem_req == secondaryMemReq[tid];
 
     assert(!cpu->switchedOut());
 
     // Wake up CPU if it was idle
     cpu->wakeCPU();
 
-    if (fetchStatus[tid] != ItlbWait || mem_req != memReq[tid] ||
-        mem_req->getVaddr() != memReq[tid]->getVaddr()) {
+    if (!is_primary && !is_secondary) {
         DPRINTF(Fetch, "[tid:%i] Ignoring itlb completed after squash\n",
                 tid);
         ++fetchStats.tlbSquashes;
         return;
     }
 
+    if (is_primary && fetchStatus[tid] != ItlbWait) {
+        DPRINTF(Fetch, "[tid:%i] Ignoring primary itlb completion in "
+                "state %i\n", tid, fetchStatus[tid]);
+        ++fetchStats.tlbSquashes;
+        return;
+    }
 
     // If translation was successful, attempt to read the icache block.
     if (fault == NoFault) {
@@ -861,6 +1347,10 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
         // If we have, just wait around for commit to squash something and put
         // us on the right track
         if (!cpu->system->isMemAddr(mem_req->getPaddr())) {
+            if (is_secondary) {
+                secondaryMemReq[tid] = nullptr;
+                return;
+            }
             warn("Address %#x is outside of physical memory, stopping fetch\n",
                     mem_req->getPaddr());
             fetchStatus[tid] = NoGoodAddr;
@@ -870,16 +1360,25 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
 
         // Build packet here.
         PacketPtr data_pkt = new Packet(mem_req, MemCmd::ReadReq);
-        data_pkt->dataDynamic(new uint8_t[fetchBufferSize]);
+        data_pkt->dataDynamic(new uint8_t[cacheBlkSize]);
 
-        fetchBufferPC[tid] = fetchBufferBlockPC;
-        fetchBufferValid[tid] = false;
         DPRINTF(Fetch, "Fetch: Doing instruction read.\n");
 
         fetchStats.cacheLines++;
+        if (is_primary) {
+            fetchStats.fetchBufferStartOffsetDist[
+                (fetchBufferPC[tid] % 64) / 16]++;
+        }
 
         // Access the cache.
         if (!icachePort.sendTimingReq(data_pkt)) {
+            if (is_secondary) {
+                DPRINTF(Fetch, "[tid:%i] Dropping secondary fetch line; "
+                        "cache could not accept it\n", tid);
+                delete data_pkt;
+                secondaryMemReq[tid] = nullptr;
+                return;
+            }
             assert(retryPkt == NULL);
             assert(retryTid == InvalidThreadID);
             DPRINTF(Fetch, "[tid:%i] Out of MSHRs!\n", tid);
@@ -893,12 +1392,18 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
             DPRINTF(Activity, "[tid:%i] Activity: Waiting on I-cache "
                     "response.\n", tid);
             lastIcacheStall[tid] = curTick();
-            fetchStatus[tid] = IcacheWaitResponse;
+            if (is_primary) {
+                fetchStatus[tid] = IcacheWaitResponse;
+            }
             // Notify Fetch Request probe when a packet containing a fetch
             // request is successfully sent
             ppFetchRequestSent->notify(mem_req);
         }
     } else {
+        if (is_secondary) {
+            secondaryMemReq[tid] = nullptr;
+            return;
+        }
         // Don't send an instruction to decode if we can't handle it.
         if (!(numInst < fetchWidth) ||
                 !(fetchQueue[tid].size() < fetchQueueSize)) {
@@ -963,10 +1468,12 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
         DPRINTF(Fetch, "[tid:%i] Squashing outstanding Icache miss.\n",
                 tid);
         memReq[tid] = NULL;
+        secondaryMemReq[tid] = NULL;
     } else if (fetchStatus[tid] == ItlbWait) {
         DPRINTF(Fetch, "[tid:%i] Squashing outstanding ITLB miss.\n",
                 tid);
         memReq[tid] = NULL;
+        secondaryMemReq[tid] = NULL;
     }
 
     // Get rid of the retrying packet if it was from this thread.
@@ -980,6 +1487,8 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
     }
 
     fetchStatus[tid] = Squashing;
+    fetchBufferValidSize[tid] = 0;
+    fetchBufferSecondaryFilled[tid] = false;
 
     // Empty fetch queue
     fetchQueue[tid].clear();
@@ -1079,61 +1588,96 @@ Fetch::sampleDecoupledBPUOutput(ThreadID tid,
 {
     (void)tid;
 
-    const bool ubtb_attempt = output.bpu1.valid && output.bpu1.taken;
-    const bool btb_verifies_ubtb =
-        output.bpu2.valid && output.bpu2.taken && output.bpu2.ubtb_fillable;
-    const auto same_sign = [](const bpu_sign_t& lhs,
-                              const bpu_sign_t& rhs) {
-        return lhs.offset == rhs.offset &&
-            lhs.type == rhs.type &&
-            lhs.compressed == rhs.compressed &&
-            lhs.is_call == rhs.is_call;
-    };
-    const bool ubtb_matches_btb =
-        ubtb_attempt && btb_verifies_ubtb &&
-        output.bpu1.target == output.bpu2.target &&
-        output.bpu1.next_cfi_span_2b == output.bpu2.next_cfi_span_2b &&
-        same_sign(output.bpu1.sign, output.bpu2.sign);
-
-    if (ubtb_matches_btb) {
-        ++fetchStats.decoupledBpuUbtbHits;
-    } else if (ubtb_attempt || btb_verifies_ubtb) {
-        // uBTB is a fast cache of BTB's taken direct answer. Count only the
-        // comparable cases: BTB has a fillable taken answer, or uBTB tried to
-        // steer fetch and BTB did not verify the same answer.
-        ++fetchStats.decoupledBpuUbtbMisses;
-    }
-
-    if (output.bpu2.valid && output.bpu2.sign.type == CFI_BRA) {
-        if (output.bpu2.tage_used) {
-            ++fetchStats.decoupledBpuTageHits;
-        } else {
-            ++fetchStats.decoupledBpuTageMisses;
-        }
-    }
-
-    if (output.bpu2.valid && output.bpu2.sign.type == CFI_JALR_CALL) {
-        if (output.bpu2.tt_hit) {
-            ++fetchStats.decoupledBpuTTHits;
-        } else {
-            ++fetchStats.decoupledBpuTTMisses;
-        }
-
-        if (decoupledBPUUseITTAGE &&
-            output.ittage_response.checkpoint_id >= 0) {
-            if (output.ittage_response.hit) {
-                ++fetchStats.decoupledBpuITTAGEHits;
+    if (decoupledBPUVersion == 2) {
+        if (output.bpu3.valid && output.bpu3.sign.type == CFI_BRA) {
+            if (output.bpu3.tage_used) {
+                ++fetchStats.decoupledBpuTageHits;
             } else {
-                ++fetchStats.decoupledBpuITTAGEMisses;
+                ++fetchStats.decoupledBpuTageMisses;
             }
         }
-    }
 
-    if (output.bpu2.valid && output.bpu2.sign.type == CFI_JALR_RET) {
-        if (output.bpu2.ras_valid) {
-            ++fetchStats.decoupledBpuRASHits;
-        } else {
-            ++fetchStats.decoupledBpuRASMisses;
+        if (output.bpu3.valid && output.bpu3.sign.type == CFI_JALR_CALL) {
+            if (output.bpu3.tt_hit) {
+                ++fetchStats.decoupledBpuTTHits;
+            } else {
+                ++fetchStats.decoupledBpuTTMisses;
+            }
+
+            if (decoupledBPUUseITTAGE &&
+                output.ittage_response.checkpoint_id >= 0) {
+                if (output.ittage_response.hit) {
+                    ++fetchStats.decoupledBpuITTAGEHits;
+                } else {
+                    ++fetchStats.decoupledBpuITTAGEMisses;
+                }
+            }
+        }
+
+        if (output.bpu3.valid && output.bpu3.sign.type == CFI_JALR_RET) {
+            if (output.bpu3.ras_valid) {
+                ++fetchStats.decoupledBpuRASHits;
+            } else {
+                ++fetchStats.decoupledBpuRASMisses;
+            }
+        }
+    } else {
+        const bool ubtb_attempt = output.bpu1.valid && output.bpu1.taken;
+        const bool btb_verifies_ubtb =
+            output.bpu2.valid && output.bpu2.taken &&
+            output.bpu2.ubtb_fillable;
+        const auto same_sign = [](const bpu_sign_t& lhs,
+                                  const bpu_sign_t& rhs) {
+            return lhs.offset == rhs.offset &&
+                lhs.type == rhs.type &&
+                lhs.compressed == rhs.compressed &&
+                lhs.is_call == rhs.is_call;
+        };
+        const bool ubtb_matches_btb =
+            ubtb_attempt && btb_verifies_ubtb &&
+            output.bpu1.target == output.bpu2.target &&
+            output.bpu1.next_cfi_span_2b == output.bpu2.next_cfi_span_2b &&
+            same_sign(output.bpu1.sign, output.bpu2.sign);
+
+        if (ubtb_matches_btb) {
+            ++fetchStats.decoupledBpuUbtbHits;
+        } else if (ubtb_attempt || btb_verifies_ubtb) {
+            // uBTB is a fast cache of BTB's taken direct answer. Count only
+            // comparable cases.
+            ++fetchStats.decoupledBpuUbtbMisses;
+        }
+
+        if (output.bpu2.valid && output.bpu2.sign.type == CFI_BRA) {
+            if (output.bpu2.tage_used) {
+                ++fetchStats.decoupledBpuTageHits;
+            } else {
+                ++fetchStats.decoupledBpuTageMisses;
+            }
+        }
+
+        if (output.bpu2.valid && output.bpu2.sign.type == CFI_JALR_CALL) {
+            if (output.bpu2.tt_hit) {
+                ++fetchStats.decoupledBpuTTHits;
+            } else {
+                ++fetchStats.decoupledBpuTTMisses;
+            }
+
+            if (decoupledBPUUseITTAGE &&
+                output.ittage_response.checkpoint_id >= 0) {
+                if (output.ittage_response.hit) {
+                    ++fetchStats.decoupledBpuITTAGEHits;
+                } else {
+                    ++fetchStats.decoupledBpuITTAGEMisses;
+                }
+            }
+        }
+
+        if (output.bpu2.valid && output.bpu2.sign.type == CFI_JALR_RET) {
+            if (output.bpu2.ras_valid) {
+                ++fetchStats.decoupledBpuRASHits;
+            } else {
+                ++fetchStats.decoupledBpuRASMisses;
+            }
         }
     }
 
@@ -1141,8 +1685,257 @@ Fetch::sampleDecoupledBPUOutput(ThreadID tid,
         ++fetchStats.decoupledBpuFtqPushes;
     }
 
-    if (output.ubtb_filled) {
+    if (decoupledBPUVersion == 1 && output.ubtb_filled) {
         ++fetchStats.decoupledBpuUbtbFills;
+    }
+}
+
+void
+Fetch::sampleDecoupledBPUCommitAccuracy(
+    const DecoupledBpuPendingCommit &entry)
+{
+    if (!entry.valid ||
+        (!entry.accuracyOnly && !entry.update.btb_update.valid) ||
+        (entry.accuracyOnly && entry.actualType != CFI_NULL)) {
+        return;
+    }
+
+    const bool actual_taken = entry.update.btb_update.branch_taken ||
+        entry.actualType == CFI_JAL;
+    Addr actual_target = 0;
+    const btb_entry_record_t& e1 = entry.update.btb_update.entry.e1;
+    const btb_entry_record_t& e2 = entry.update.btb_update.entry.e2;
+    if (entry.actualType == CFI_NULL) {
+        actual_target = 0;
+    } else if (entry.update.tt_update.valid) {
+        actual_target = static_cast<Addr>(entry.update.tt_update.target);
+    } else if (e1.valid) {
+        actual_target = static_cast<Addr>(e1.target);
+    } else if (e2.valid) {
+        actual_target = static_cast<Addr>(e2.target);
+    }
+
+    enum class AccuracyReason
+    {
+        CorrectNoPrediction,
+        CorrectPrediction,
+        MissNoPrediction,
+        MissFalseCfi,
+        MissWrongCfi,
+        MissWrongDirection,
+        MissWrongTarget
+    };
+
+    auto sign_matches = [&entry](const DecoupledBpuStagePrediction&
+                                 prediction) {
+        return prediction.sign.offset == entry.actualEntryOffset2B &&
+            prediction.sign.type == entry.actualType &&
+            prediction.sign.compressed == entry.actualCompressed &&
+            prediction.sign.is_call == entry.actualIsCall;
+    };
+    auto analyze_taken_cache =
+        [&entry, actual_taken, actual_target, sign_matches](
+            const DecoupledBpuStagePrediction& prediction) {
+        if (entry.actualType == CFI_NULL) {
+            return (!prediction.valid || !prediction.taken) ?
+                AccuracyReason::CorrectNoPrediction :
+                AccuracyReason::MissFalseCfi;
+        }
+
+        if (!actual_taken) {
+            if (!prediction.valid || !prediction.taken) {
+                return AccuracyReason::CorrectNoPrediction;
+            }
+            return sign_matches(prediction) ?
+                AccuracyReason::MissWrongDirection :
+                AccuracyReason::MissWrongCfi;
+        }
+
+        if (!prediction.valid || !prediction.taken) {
+            return AccuracyReason::MissNoPrediction;
+        }
+        if (!sign_matches(prediction)) {
+            return AccuracyReason::MissWrongCfi;
+        }
+        return prediction.target == actual_target ?
+            AccuracyReason::CorrectPrediction :
+            AccuracyReason::MissWrongTarget;
+    };
+    auto analyze_btb = [&entry, actual_taken, actual_target, sign_matches](
+        const DecoupledBpuStagePrediction& prediction) {
+        if (entry.actualType == CFI_NULL) {
+            return prediction.valid ?
+                AccuracyReason::MissFalseCfi :
+                AccuracyReason::CorrectNoPrediction;
+        }
+
+        if (!prediction.valid) {
+            return AccuracyReason::MissNoPrediction;
+        }
+        if (!sign_matches(prediction)) {
+            return AccuracyReason::MissWrongCfi;
+        }
+        if (prediction.taken != actual_taken) {
+            return AccuracyReason::MissWrongDirection;
+        }
+        if (actual_taken && prediction.target != actual_target) {
+            return AccuracyReason::MissWrongTarget;
+        }
+
+        return AccuracyReason::CorrectPrediction;
+    };
+    auto analyze_tage = [&entry, actual_taken, sign_matches](
+        const DecoupledBpuStagePrediction& prediction) {
+        if (entry.actualType == CFI_NULL) {
+            return prediction.valid ?
+                AccuracyReason::MissFalseCfi :
+                AccuracyReason::CorrectNoPrediction;
+        }
+        if (entry.actualType != CFI_BRA) {
+            return prediction.valid ?
+                AccuracyReason::MissWrongCfi :
+                AccuracyReason::CorrectNoPrediction;
+        }
+        if (!prediction.valid) {
+            return AccuracyReason::MissNoPrediction;
+        }
+        if (!sign_matches(prediction)) {
+            return AccuracyReason::MissWrongCfi;
+        }
+        return prediction.taken == actual_taken ?
+            AccuracyReason::CorrectPrediction :
+            AccuracyReason::MissWrongDirection;
+    };
+
+    auto is_hit = [](AccuracyReason reason) {
+        return reason == AccuracyReason::CorrectNoPrediction ||
+            reason == AccuracyReason::CorrectPrediction;
+    };
+
+    if (decoupledBPUVersion == 2) {
+        const AccuracyReason abtb_reason =
+            analyze_taken_cache(entry.abtbPrediction);
+        if (is_hit(abtb_reason)) {
+            ++fetchStats.decoupledBpuAbtbHits;
+        } else {
+            ++fetchStats.decoupledBpuAbtbMisses;
+        }
+        switch (abtb_reason) {
+          case AccuracyReason::CorrectNoPrediction:
+            ++fetchStats.decoupledBpuAbtbCorrectNoPrediction;
+            break;
+          case AccuracyReason::CorrectPrediction:
+            ++fetchStats.decoupledBpuAbtbCorrectPrediction;
+            break;
+          case AccuracyReason::MissNoPrediction:
+            ++fetchStats.decoupledBpuAbtbMissNoPrediction;
+            break;
+          case AccuracyReason::MissFalseCfi:
+            ++fetchStats.decoupledBpuAbtbMissFalseCfi;
+            break;
+          case AccuracyReason::MissWrongCfi:
+            ++fetchStats.decoupledBpuAbtbMissWrongCfi;
+            break;
+          case AccuracyReason::MissWrongDirection:
+            ++fetchStats.decoupledBpuAbtbMissWrongDirection;
+            break;
+          case AccuracyReason::MissWrongTarget:
+            ++fetchStats.decoupledBpuAbtbMissWrongTarget;
+            break;
+        }
+
+        const AccuracyReason sbtb_reason =
+            analyze_taken_cache(entry.sbtbPrediction);
+        if (is_hit(sbtb_reason)) {
+            ++fetchStats.decoupledBpuSbtbHits;
+        } else {
+            ++fetchStats.decoupledBpuSbtbMisses;
+        }
+        switch (sbtb_reason) {
+          case AccuracyReason::CorrectNoPrediction:
+            ++fetchStats.decoupledBpuSbtbCorrectNoPrediction;
+            break;
+          case AccuracyReason::CorrectPrediction:
+            ++fetchStats.decoupledBpuSbtbCorrectPrediction;
+            break;
+          case AccuracyReason::MissNoPrediction:
+            ++fetchStats.decoupledBpuSbtbMissNoPrediction;
+            break;
+          case AccuracyReason::MissFalseCfi:
+            ++fetchStats.decoupledBpuSbtbMissFalseCfi;
+            break;
+          case AccuracyReason::MissWrongCfi:
+            ++fetchStats.decoupledBpuSbtbMissWrongCfi;
+            break;
+          case AccuracyReason::MissWrongDirection:
+            ++fetchStats.decoupledBpuSbtbMissWrongDirection;
+            break;
+          case AccuracyReason::MissWrongTarget:
+            ++fetchStats.decoupledBpuSbtbMissWrongTarget;
+            break;
+        }
+    }
+
+    const AccuracyReason btb_reason = analyze_btb(entry.btbPrediction);
+    if (is_hit(btb_reason)) {
+        ++fetchStats.decoupledBpuBtbHits;
+    } else {
+        ++fetchStats.decoupledBpuBtbMisses;
+    }
+    switch (btb_reason) {
+      case AccuracyReason::CorrectNoPrediction:
+        ++fetchStats.decoupledBpuBtbCorrectNoPrediction;
+        break;
+      case AccuracyReason::CorrectPrediction:
+        ++fetchStats.decoupledBpuBtbCorrectPrediction;
+        break;
+      case AccuracyReason::MissNoPrediction:
+        ++fetchStats.decoupledBpuBtbMissNoPrediction;
+        break;
+      case AccuracyReason::MissFalseCfi:
+        ++fetchStats.decoupledBpuBtbMissFalseCfi;
+        break;
+      case AccuracyReason::MissWrongCfi:
+        ++fetchStats.decoupledBpuBtbMissWrongCfi;
+        break;
+      case AccuracyReason::MissWrongDirection:
+        ++fetchStats.decoupledBpuBtbMissWrongDirection;
+        break;
+      case AccuracyReason::MissWrongTarget:
+        ++fetchStats.decoupledBpuBtbMissWrongTarget;
+        break;
+    }
+
+    if (entry.actualType == CFI_BRA || entry.tagePrediction.valid) {
+        const AccuracyReason tage_reason =
+            analyze_tage(entry.tagePrediction);
+        if (is_hit(tage_reason)) {
+            ++fetchStats.decoupledBpuTageAccuracyHits;
+        } else {
+            ++fetchStats.decoupledBpuTageAccuracyMisses;
+        }
+        switch (tage_reason) {
+          case AccuracyReason::CorrectNoPrediction:
+            ++fetchStats.decoupledBpuTageCorrectNoPrediction;
+            break;
+          case AccuracyReason::CorrectPrediction:
+            ++fetchStats.decoupledBpuTageCorrectPrediction;
+            break;
+          case AccuracyReason::MissNoPrediction:
+            ++fetchStats.decoupledBpuTageMissNoPrediction;
+            break;
+          case AccuracyReason::MissFalseCfi:
+            ++fetchStats.decoupledBpuTageMissFalseCfi;
+            break;
+          case AccuracyReason::MissWrongCfi:
+            ++fetchStats.decoupledBpuTageMissWrongCfi;
+            break;
+          case AccuracyReason::MissWrongDirection:
+            ++fetchStats.decoupledBpuTageMissWrongDirection;
+            break;
+          case AccuracyReason::MissWrongTarget:
+            break;
+        }
     }
 }
 
@@ -1155,16 +1948,37 @@ Fetch::recordDecoupledBPUCommitInfo(ThreadID tid, const DynInstPtr &inst)
     }
 
     const cfi_type_t cfi_type = decoupledBPUCFIType(inst);
-    if (cfi_type == CFI_NULL) {
-        return;
-    }
-
     const Addr inst_addr = inst->pcState().instAddr();
     const DecoupledBpuFetchPredictionSegment* segment =
         findDecoupledBPUFetchPrediction(tid, inst_addr);
     const Addr entry_base = segment ? segment->entryBase :
         fetchBufferAlignPC(inst_addr);
     if (inst_addr < entry_base) {
+        return;
+    }
+
+    if (cfi_type == CFI_NULL) {
+        if (segment != nullptr) {
+            const Addr inst_end =
+                inst_addr + static_cast<Addr>(inst->staticInst->size());
+            const Addr segment_end =
+                segment->entryBase +
+                static_cast<Addr>(
+                    segment->spanStart2B + segment->spanCount2B) * 2;
+            if (inst_end >= segment_end) {
+                DecoupledBpuPendingCommit pending;
+                pending.valid = true;
+                pending.accuracyOnly = true;
+                pending.seqNum = inst->seqNum;
+                pending.entryBase = entry_base;
+                pending.actualType = CFI_NULL;
+                pending.abtbPrediction = segment->abtbPrediction;
+                pending.sbtbPrediction = segment->sbtbPrediction;
+                pending.btbPrediction = segment->btbPrediction;
+                pending.tagePrediction = segment->tagePrediction;
+                decoupledBPUPendingCommits[tid].push_back(pending);
+            }
+        }
         return;
     }
 
@@ -1185,29 +1999,6 @@ Fetch::recordDecoupledBPUCommitInfo(ThreadID tid, const DynInstPtr &inst)
     sign.compressed = inst->staticInst->size() <= 2;
     sign.is_call = inst->isCall();
 
-    const bool taken_cfi =
-        inst->isUncondCtrl() || inst->isIndirectCtrl() ||
-        inst->readPredTaken();
-    if (taken_cfi) {
-        const Addr predicted_cfi_addr =
-            segment && segment->takenValid ?
-            segment->entryBase +
-                static_cast<Addr>(segment->takenSign.offset) * 2 :
-            0;
-        const bool btb_marker_matches =
-            segment && segment->takenValid &&
-            predicted_cfi_addr == inst_addr &&
-            decoupledBPUTypeMatches(inst, segment->takenSign.type);
-        if (btb_marker_matches) {
-            ++fetchStats.decoupledBpuBtbHits;
-        } else {
-            // If the decoded block has no CFI, no counter is touched. A miss
-            // is only charged when a real taken/stopping CFI was fetched and
-            // the FTQ did not carry the matching BTB marker for this PC.
-            ++fetchStats.decoupledBpuBtbMisses;
-        }
-    }
-
     Addr target = 0;
     bool target_valid = false;
     if (inst->isDirectCtrl()) {
@@ -1221,6 +2012,7 @@ Fetch::recordDecoupledBPUCommitInfo(ThreadID tid, const DynInstPtr &inst)
     cfi_tracer::cfi_point_t point;
     point.sign = sign;
     point.target = target_valid ? static_cast<bpu_addr_t>(target) : 0;
+    point.next_cfi_addr = point.target;
     point.next_cfi_span_2b = 0;
     point.seq_num = inst->seqNum;
 
@@ -1242,16 +2034,27 @@ Fetch::recordDecoupledBPUCommitInfo(ThreadID tid, const DynInstPtr &inst)
         update.btb_update.branch_taken =
             inst->isUncondCtrl() || inst->readPredTaken();
 
-        auto tune_record = [cfi_type](btb_entry_record_t& record) {
+        const bpu_addr_t fallthrough_next_cfi_addr =
+            static_cast<bpu_addr_t>(
+                cfi_block_addr +
+                bpu_cfg::fetch_block_2b_count * 2);
+        auto tune_record =
+            [cfi_type, fallthrough_next_cfi_addr](
+                btb_entry_record_t& record) {
             if (!record.valid) {
                 return;
             }
 
             if (cfi_type == CFI_BRA) {
+                record.taken_next_cfi_addr = record.target;
+                record.fallthrough_next_cfi_addr =
+                    fallthrough_next_cfi_addr;
                 record.taken_next_cfi_span_2b = 0;
                 record.fallthrough_next_cfi_span_2b =
                     bpu_cfg::fetch_block_2b_count;
             } else {
+                record.taken_next_cfi_addr = record.target;
+                record.fallthrough_next_cfi_addr = 0;
                 record.taken_next_cfi_span_2b = 0;
                 record.fallthrough_next_cfi_span_2b = 0;
             }
@@ -1273,6 +2076,17 @@ Fetch::recordDecoupledBPUCommitInfo(ThreadID tid, const DynInstPtr &inst)
         pending.valid = true;
         pending.seqNum = inst->seqNum;
         pending.update = update;
+        pending.entryBase = entry_base;
+        pending.actualEntryOffset2B = entry_offset_2b;
+        pending.actualType = cfi_type;
+        pending.actualCompressed = sign.compressed;
+        pending.actualIsCall = sign.is_call;
+        if (segment != nullptr) {
+            pending.abtbPrediction = segment->abtbPrediction;
+            pending.sbtbPrediction = segment->sbtbPrediction;
+            pending.btbPrediction = segment->btbPrediction;
+            pending.tagePrediction = segment->tagePrediction;
+        }
         decoupledBPUPendingCommits[tid].push_back(pending);
 
         ++fetchStats.decoupledBpuCfiRecords;
@@ -1311,6 +2125,7 @@ Fetch::updateDecoupledBPUMispredictCommitInfo(
                 [actual_target](btb_entry_record_t& record) {
                     if (record.valid) {
                         record.target = actual_target;
+                        record.taken_next_cfi_addr = actual_target;
                     }
                 };
             patch_target(it->update.btb_update.entry.e1);
@@ -1346,6 +2161,11 @@ Fetch::commitDecoupledBPU(ThreadID tid, InstSeqNum done_seq,
         pending.pop_front();
 
         if (!entry.valid) {
+            continue;
+        }
+
+        sampleDecoupledBPUCommitAccuracy(entry);
+        if (entry.accuracyOnly) {
             continue;
         }
 
@@ -1443,8 +2263,10 @@ Fetch::tickDecoupledBPU(ThreadID tid)
         std::max<double>(
             decoupledBpus[tid]->ittage_checkpoint_count(),
             fetchStats.decoupledBpuITTAGECheckpointsMax.value());
-    if (output.bpu2.speculative_id >= 0) {
-        decoupledBPULastSpeculativeId[tid] = output.bpu2.speculative_id;
+    const int output_speculative_id = decoupledBPUVersion == 2 ?
+        output.bpu3.speculative_id : output.bpu2.speculative_id;
+    if (output_speculative_id >= 0) {
+        decoupledBPULastSpeculativeId[tid] = output_speculative_id;
     }
     sampleDecoupledBPUOutput(tid, output);
 
@@ -1497,7 +2319,7 @@ Fetch::tickDecoupledBPU(ThreadID tid)
                 output.lookup_cfi_addr, output.redirect.sign.offset,
                 output.redirect.target, output.bpu3_old_fetch_span_2b,
                 output.bpu3_new_fetch_span_2b, output.bpu3_next_cfi_addr,
-                output.ittage_response.hit, output.bpu2.speculative_id);
+                output.ittage_response.hit, output_speculative_id);
     }
 }
 
@@ -1519,6 +2341,12 @@ Fetch::pumpDecoupledBPU(ThreadID tid, unsigned budget)
     }
 }
 
+void
+Fetch::refillDecoupledBPU(ThreadID tid)
+{
+    pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+}
+
 bool
 Fetch::decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr)
 {
@@ -1536,7 +2364,7 @@ Fetch::decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr)
     while (true) {
         if (!decoupledBpus[tid]->ftq_ready()) {
             ++fetchStats.decoupledBpuFtqEmptyOnRequest;
-            pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+            refillDecoupledBPU(tid);
             if (!decoupledBpus[tid]->ftq_ready()) {
                 return stale_recovered_to_fetch;
             }
@@ -1566,7 +2394,7 @@ Fetch::decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr)
                                         -1, true);
             decoupledBPULastSpeculativeId[tid] = -1;
             stale_recovered_to_fetch = true;
-            pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+            refillDecoupledBPU(tid);
             continue;
         }
 
@@ -1590,6 +2418,10 @@ Fetch::decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr)
         return true;
     }
 
+    if (findDecoupledBPUFetchPrediction(tid, fetch_addr) != nullptr) {
+        return true;
+    }
+
     if (fetchOffset[tid] != 0) {
         return true;
     }
@@ -1605,7 +2437,7 @@ Fetch::decoupledBPUCanFetch(ThreadID tid, Addr fetch_addr)
     decoupledBpus[tid]->recover(static_cast<bpu_addr_t>(fetch_addr), -1,
                                 true);
     decoupledBPULastSpeculativeId[tid] = -1;
-    pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+    refillDecoupledBPU(tid);
 
     return true;
 }
@@ -1661,6 +2493,42 @@ Fetch::recordDecoupledBPUFetchPrediction(ThreadID tid,
         segment.takenSign.type != CFI_NULL &&
         segment.takenSign.offset >= segment.spanStart2B &&
         segment.takenSign.offset < span_end_2b;
+
+    if (entry.abtb_taken_valid &&
+        entry.abtb_taken_sign.offset >= segment.spanStart2B &&
+        entry.abtb_taken_sign.offset < span_end_2b) {
+        segment.abtbPrediction.valid = true;
+        segment.abtbPrediction.taken = true;
+        segment.abtbPrediction.sign = entry.abtb_taken_sign;
+        segment.abtbPrediction.target = static_cast<Addr>(entry.abtb_target);
+    }
+
+    if (entry.sbtb_taken_valid &&
+        entry.sbtb_taken_sign.offset >= segment.spanStart2B &&
+        entry.sbtb_taken_sign.offset < span_end_2b) {
+        segment.sbtbPrediction.valid = true;
+        segment.sbtbPrediction.taken = true;
+        segment.sbtbPrediction.sign = entry.sbtb_taken_sign;
+        segment.sbtbPrediction.target = static_cast<Addr>(entry.sbtb_target);
+    }
+
+    if (entry.btb_prediction_valid &&
+        entry.btb_prediction_sign.offset >= segment.spanStart2B &&
+        entry.btb_prediction_sign.offset < span_end_2b) {
+        segment.btbPrediction.valid = true;
+        segment.btbPrediction.taken = entry.btb_prediction_taken;
+        segment.btbPrediction.sign = entry.btb_prediction_sign;
+        segment.btbPrediction.target =
+            static_cast<Addr>(entry.btb_prediction_target);
+    }
+
+    if (entry.tage_prediction_valid &&
+        entry.tage_prediction_sign.offset >= segment.spanStart2B &&
+        entry.tage_prediction_sign.offset < span_end_2b) {
+        segment.tagePrediction.valid = true;
+        segment.tagePrediction.taken = entry.tage_prediction_taken;
+        segment.tagePrediction.sign = entry.tage_prediction_sign;
+    }
 
     decoupledBPUFetchPredictions[tid].push_back(segment);
     while (decoupledBPUFetchPredictions[tid].size() > 128) {
@@ -1822,7 +2690,11 @@ Fetch::consumeDecoupledFTQCacheBlock(ThreadID tid, Addr fetch_addr)
         return false;
     }
 
-    const Addr block_start = fetchBufferAlignPC(fetch_addr);
+    const bool in_current_window = fetchBufferValid[tid] &&
+        fetch_addr >= fetchBufferPC[tid] &&
+        fetch_addr < fetchBufferPC[tid] + fetchBufferSize;
+    const Addr block_start = in_current_window ?
+        fetchBufferPC[tid] : fetchBufferAlignPC(fetch_addr);
     const Addr block_end = block_start + fetchBufferSize;
     bool consumed_any = false;
 
@@ -1851,6 +2723,10 @@ Fetch::consumeDecoupledFTQCacheBlock(ThreadID tid, Addr fetch_addr)
             return consumed_any;
         }
 
+        fetchStats.decoupledBpuFtqIcacheStartOffsetDist[
+            (front_base % 64) / 16]++;
+        accountFetchBankSpan(front_base, consume_end);
+
         recordDecoupledBPUFetchPrediction(tid, *front, span_start_2b,
                                            two_byte_count);
         decoupledBpus[tid]->consume_ftq(two_byte_count);
@@ -1859,6 +2735,24 @@ Fetch::consumeDecoupledFTQCacheBlock(ThreadID tid, Addr fetch_addr)
 
         if (two_byte_count < front_span_2b) {
             return true;
+        }
+    }
+}
+
+void
+Fetch::accountFetchBankSpan(Addr start, Addr end)
+{
+    bool touched_banks[4] = {};
+    for (Addr touch_addr = start; touch_addr < end;) {
+        touched_banks[(touch_addr % 64) / 16] = true;
+        const Addr next_bank_addr = (touch_addr & ~static_cast<Addr>(15)) +
+            16;
+        touch_addr = std::min(next_bank_addr, end);
+    }
+
+    for (unsigned bank = 0; bank < 4; ++bank) {
+        if (touched_banks[bank]) {
+            fetchStats.decoupledBpuFtqIcacheReadBankDist[bank]++;
         }
     }
 }
@@ -2140,15 +3034,21 @@ Fetch::checkSignalsAndUpdate(ThreadID tid)
                 tid, fromCommit->commitInfo[tid].mispredictInst,
                 fromCommit->commitInfo[tid].branchTaken,
                 *fromCommit->commitInfo[tid].pc);
+            commitDominantLineBranches(
+                tid, fromCommit->commitInfo[tid].doneSeqNum);
             commitDecoupledBPU(tid, fromCommit->commitInfo[tid].doneSeqNum,
                                false);
             branchPred->squash(fromCommit->commitInfo[tid].doneSeqNum,
                     *fromCommit->commitInfo[tid].pc,
                     fromCommit->commitInfo[tid].branchTaken, tid);
         } else {
+            commitDominantLineBranches(
+                tid, fromCommit->commitInfo[tid].doneSeqNum);
             branchPred->squash(fromCommit->commitInfo[tid].doneSeqNum,
                               tid);
         }
+        squashDominantLineBranches(tid,
+                                   fromCommit->commitInfo[tid].doneSeqNum);
         squashDecoupledBPUCommitInfo(tid,
                                      fromCommit->commitInfo[tid].doneSeqNum);
 
@@ -2165,6 +3065,8 @@ Fetch::checkSignalsAndUpdate(ThreadID tid)
         // Update the branch predictor if it wasn't a squashed instruction
         // that was broadcasted.
         branchPred->update(fromCommit->commitInfo[tid].doneSeqNum, tid);
+        commitDominantLineBranches(tid,
+                                   fromCommit->commitInfo[tid].doneSeqNum);
         commitDecoupledBPU(tid, fromCommit->commitInfo[tid].doneSeqNum);
     }
 
@@ -2188,6 +3090,8 @@ Fetch::checkSignalsAndUpdate(ThreadID tid)
             branchPred->squash(fromDecode->decodeInfo[tid].doneSeqNum,
                               tid);
         }
+        squashDominantLineBranches(tid,
+                                   fromDecode->decodeInfo[tid].doneSeqNum);
         squashDecoupledBPUCommitInfo(tid,
                                      fromDecode->decodeInfo[tid].doneSeqNum);
 
@@ -2346,14 +3250,9 @@ Fetch::fetch(bool &status_change)
     }
 
     if (fetchStatus[tid] == Running) {
-        // Align the fetch PC so its at the start of a fetch buffer segment.
-        Addr fetchBufferBlockPC = fetchBufferAlignPC(fetchAddr);
-
-        // If buffer is no longer valid or fetchAddr has moved to point
-        // to the next cache block, AND we have no remaining ucode
-        // from a macro-op, then start fetch from icache.
-        if (!(fetchBufferValid[tid] &&
-                    fetchBufferBlockPC == fetchBufferPC[tid]) && !inRom &&
+        // If the current buffer has no bytes for fetchAddr, and we have no
+        // remaining ucode from a macro-op, then start fetch from icache.
+        if (!fetchBufferContains(tid, fetchAddr) && !inRom &&
                 !macroop[tid]) {
             if (!decoupledBPUCanFetch(tid, fetchAddr)) {
                 ++fetchStats.idleCycles;
@@ -2363,7 +3262,6 @@ Fetch::fetch(bool &status_change)
             pcOffset = fetchOffset[tid];
             fetchAddr = (this_pc.instAddr() + pcOffset) &
                 decoder[tid]->pcMask();
-            fetchBufferBlockPC = fetchBufferAlignPC(fetchAddr);
 
             DPRINTF(Fetch, "[tid:%i] Attempting to translate and read "
                     "instruction, starting at PC %s.\n", tid, this_pc);
@@ -2372,7 +3270,9 @@ Fetch::fetch(bool &status_change)
                 fetchCacheLine(fetchAddr, tid, this_pc.instAddr());
             if (fetch_started) {
                 if (consumeDecoupledFTQCacheBlock(tid, fetchAddr)) {
-                    pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+                    if (!decoupledBPURefillOnFTQEmpty) {
+                        pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+                    }
                 }
             }
 
@@ -2384,11 +3284,12 @@ Fetch::fetch(bool &status_change)
             else
                 ++fetchStats.miscStallCycles;
             return;
-        } else if (fetchBufferValid[tid] &&
-                   fetchBufferBlockPC == fetchBufferPC[tid] && !inRom &&
+        } else if (fetchBufferContains(tid, fetchAddr) && !inRom &&
                    !macroop[tid]) {
             if (consumeDecoupledFTQCacheBlock(tid, fetchAddr)) {
-                pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+                if (!decoupledBPURefillOnFTQEmpty) {
+                    pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+                }
             }
         } else if (checkInterrupt(this_pc.instAddr()) &&
                 !delayedCommit[tid]) {
@@ -2430,7 +3331,7 @@ Fetch::fetch(bool &status_change)
     // Need to halt fetch if quiesce instruction detected
     bool quiesce = false;
 
-    const unsigned numInsts = fetchBufferSize / instSize;
+    const unsigned numInsts = fetchBufferValidSize[tid] / instSize;
     unsigned blkOffset = (fetchAddr - fetchBufferPC[tid]) / instSize;
 
     auto *dec_ptr = decoder[tid];
@@ -2446,13 +3347,9 @@ Fetch::fetch(bool &status_change)
         // in the decoder.
         bool needMem = !inRom && !curMacroop && !dec_ptr->instReady();
         fetchAddr = (this_pc.instAddr() + pcOffset) & pc_mask;
-        Addr fetchBufferBlockPC = fetchBufferAlignPC(fetchAddr);
 
         if (needMem) {
-            // If buffer is no longer valid or fetchAddr has moved to point
-            // to the next cache block then start fetch from icache.
-            if (!fetchBufferValid[tid] ||
-                fetchBufferBlockPC != fetchBufferPC[tid])
+            if (!fetchBufferContains(tid, fetchAddr))
                 break;
 
             if (blkOffset >= numInsts) {
@@ -2577,7 +3474,7 @@ Fetch::fetch(bool &status_change)
     } else if (numInst >= fetchWidth) {
         DPRINTF(Fetch, "[tid:%i] Done fetching, reached fetch bandwidth "
                 "for this cycle.\n", tid);
-    } else if (blkOffset >= fetchBufferSize) {
+    } else if (blkOffset >= numInsts) {
         DPRINTF(Fetch, "[tid:%i] Done fetching, reached the end of the"
                 "fetch buffer.\n", tid);
     }
@@ -2592,8 +3489,7 @@ Fetch::fetch(bool &status_change)
     // pipeline a fetch if we're crossing a fetch buffer boundary and not in
     // a state that would preclude fetching
     fetchAddr = (this_pc.instAddr() + pcOffset) & pc_mask;
-    Addr fetchBufferBlockPC = fetchBufferAlignPC(fetchAddr);
-    issuePipelinedIfetch[tid] = fetchBufferBlockPC != fetchBufferPC[tid] &&
+    issuePipelinedIfetch[tid] = !fetchBufferContains(tid, fetchAddr) &&
         fetchStatus[tid] != IcacheWaitResponse &&
         fetchStatus[tid] != ItlbWait &&
         fetchStatus[tid] != IcacheWaitRetry &&
@@ -2782,11 +3678,8 @@ Fetch::pipelineIcacheAccesses(ThreadID tid)
     Addr pcOffset = fetchOffset[tid];
     Addr fetchAddr = (this_pc.instAddr() + pcOffset) & decoder[tid]->pcMask();
 
-    // Align the fetch PC so its at the start of a fetch buffer segment.
-    Addr fetchBufferBlockPC = fetchBufferAlignPC(fetchAddr);
-
-    // Unless buffer already got the block, fetch it from icache.
-    if (!(fetchBufferValid[tid] && fetchBufferBlockPC == fetchBufferPC[tid])) {
+    // Unless buffer already has the next bytes, fetch them from icache.
+    if (!fetchBufferContains(tid, fetchAddr)) {
         if (!decoupledBPUCanFetch(tid, fetchAddr)) {
             return;
         }
@@ -2794,7 +3687,6 @@ Fetch::pipelineIcacheAccesses(ThreadID tid)
         pcOffset = fetchOffset[tid];
         fetchAddr = (this_pc.instAddr() + pcOffset) &
             decoder[tid]->pcMask();
-        fetchBufferBlockPC = fetchBufferAlignPC(fetchAddr);
 
         DPRINTF(Fetch, "[tid:%i] Issuing a pipelined I-cache access, "
                 "starting at PC %s.\n", tid, this_pc);
@@ -2803,7 +3695,9 @@ Fetch::pipelineIcacheAccesses(ThreadID tid)
             fetchCacheLine(fetchAddr, tid, this_pc.instAddr());
         if (fetch_started) {
             if (consumeDecoupledFTQCacheBlock(tid, fetchAddr)) {
-                pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+                if (!decoupledBPURefillOnFTQEmpty) {
+                    pumpDecoupledBPU(tid, decoupledBPUBurstTicks);
+                }
             }
         }
     }

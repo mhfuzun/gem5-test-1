@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <vector>
 
+#include "bpu_base.hh"
 #include "bpu_ittage.hh"
 #include "bpu_structs.hh"
 #include "bpu_tage.hh"
@@ -11,7 +12,7 @@
 #include "tt_table.hh"
 #include "ubtb.hh"
 
-class bpu
+class bpu : public bpu_base
 {
     public:
         bpu(btb_cfg btb_cfg, ubtb_cfg ubtb_cfg, tt_cfg tt_cfg,

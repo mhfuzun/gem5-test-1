@@ -91,6 +91,23 @@ class BaseO3CPU(BaseCPU):
     commitToFetchDelay = Param.Cycles(1, "Commit to fetch delay")
     fetchWidth = Param.Unsigned(8, "Fetch width")
     fetchBufferSize = Param.Unsigned(64, "Fetch buffer size in bytes")
+    fetchBankAlignBytes = Param.Unsigned(
+        64,
+        "Align frontend fetch buffers to this many bytes. 64 preserves the "
+        "original one-cache-line fetch; smaller values allow a fetch buffer "
+        "to begin inside a cache line and optionally prefetch the next line",
+    )
+    dominantLinePredictor = Param.Bool(
+        False,
+        "Use a line-granular dominant-branch BTB in fetch. The selected "
+        "branch offset uses the real branch predictor once with the aligned "
+        "fetch-line PC; other branches in the same line are predicted not "
+        "taken",
+    )
+    dominantLineBtbEntries = Param.Unsigned(
+        4096,
+        "Number of direct-mapped entries in the fetch-line dominant-branch BTB",
+    )
     fetchQueueSize = Param.Unsigned(
         32, "Fetch queue size in micro-ops per-thread"
     )
@@ -215,16 +232,37 @@ class BaseO3CPU(BaseCPU):
     decoupledBPUUseITTAGE = Param.Bool(
         True, "Enable ITTAGE-side lookups in the experimental BPU path"
     )
+    decoupledBPUVersion = Param.Unsigned(
+        1, "Experimental BPU top module version: 1=uBTB/BTB, 2=ABTB/SBTB/BPU3"
+    )
     decoupledBPUBurstTicks = Param.Unsigned(
         24, "Experimental BPU internal ticks to run per fetch demand"
+    )
+    decoupledBPURefillOnFTQEmpty = Param.Bool(
+        False,
+        "Only refill the experimental BPU/FTQ path when the FTQ becomes empty",
     )
     decoupledBPUFTQDepth = Param.Unsigned(32, "Experimental BPU FTQ depth")
     decoupledBPUUBTBEntries = Param.Unsigned(
         32, "Experimental BPU uBTB entry count"
     )
+    decoupledBPUTagWidth = Param.Unsigned(
+        16, "Experimental BPU table tag width in bits"
+    )
     decoupledBPUBTBWays = Param.Unsigned(1, "Experimental BPU BTB ways")
     decoupledBPUBTBSets = Param.Unsigned(128, "Experimental BPU BTB sets")
     decoupledBPUBanks = Param.Unsigned(4, "Experimental BPU bank count")
+    decoupledBPUABTBEntries = Param.Unsigned(
+        8192, "Experimental BPU v2 ABTB total entry count"
+    )
+    decoupledBPUABTBBanks = Param.Unsigned(
+        4, "Experimental BPU v2 ABTB bank count"
+    )
+    decoupledBPUSBTBWays = Param.Unsigned(4, "Experimental BPU v2 SBTB ways")
+    decoupledBPUSBTBSets = Param.Unsigned(
+        4096, "Experimental BPU v2 SBTB sets"
+    )
+    decoupledBPUSBTBBanks = Param.Unsigned(4, "Experimental BPU v2 SBTB banks")
     decoupledBPUTTWays = Param.Unsigned(1, "Experimental BPU TT ways")
     decoupledBPUTTSets = Param.Unsigned(128, "Experimental BPU TT sets")
     needsTSO = Param.Bool(False, "Enable TSO Memory model")

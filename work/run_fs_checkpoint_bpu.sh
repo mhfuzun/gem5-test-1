@@ -30,15 +30,23 @@ CHECKPOINT="${CHECKPOINT:?set CHECKPOINT to the checkpoint number, e.g. CHECKPOI
 MEM_SIZE="${MEM_SIZE:-20GB}"
 
 BPU_ENABLE="${BPU_ENABLE:-True}"
+BPU_VERSION="${BPU_VERSION:-1}"
 BPU_USE_TAGE="${BPU_USE_TAGE:-True}"
 BPU_USE_RAS="${BPU_USE_RAS:-True}"
 BPU_USE_ITTAGE="${BPU_USE_ITTAGE:-True}"
 BPU_BURST_TICKS="${BPU_BURST_TICKS:-24}"
+BPU_REFILL_ON_FTQ_EMPTY="${BPU_REFILL_ON_FTQ_EMPTY:-True}"
 BPU_FTQ_DEPTH="${BPU_FTQ_DEPTH:-64}"
 BPU_UBTB_ENTRIES="${BPU_UBTB_ENTRIES:-128}"
+BPU_TAG_WIDTH="${BPU_TAG_WIDTH:-16}"
 BPU_BTB_WAYS="${BPU_BTB_WAYS:-4}"
 BPU_BTB_SETS="${BPU_BTB_SETS:-4096}"
 BPU_BANKS="${BPU_BANKS:-4}"
+BPU_ABTB_ENTRIES="${BPU_ABTB_ENTRIES:-8192}"
+BPU_ABTB_BANKS="${BPU_ABTB_BANKS:-4}"
+BPU_SBTB_WAYS="${BPU_SBTB_WAYS:-4}"
+BPU_SBTB_SETS="${BPU_SBTB_SETS:-4096}"
+BPU_SBTB_BANKS="${BPU_SBTB_BANKS:-4}"
 BPU_TT_WAYS="${BPU_TT_WAYS:-2}"
 BPU_TT_SETS="${BPU_TT_SETS:-1024}"
 
@@ -104,7 +112,13 @@ echo "[gem5] remote gdb port: ${REMOTE_GDB_PORT}"
 echo "[gem5] mem size: ${MEM_SIZE}"
 echo "[gem5] stop: MAXINSTS=${MAXINSTS:-<none>} REL_MAX_TICK=${REL_MAX_TICK:-<none>} ABS_MAX_TICK=${ABS_MAX_TICK:-<none>}"
 echo "[bpu] decoupled: ${BPU_ENABLE}"
+echo "[bpu] version: ${BPU_VERSION}"
 echo "[bpu] modules: TAGE=${BPU_USE_TAGE} RAS=${BPU_USE_RAS} ITTAGE=${BPU_USE_ITTAGE}"
+echo "[bpu] refill-on-ftq-empty: ${BPU_REFILL_ON_FTQ_EMPTY}"
+echo "[bpu] tag-width: ${BPU_TAG_WIDTH}"
+echo "[bpu] btb: banks=${BPU_BANKS} ways=${BPU_BTB_WAYS} sets=${BPU_BTB_SETS}"
+echo "[bpu] abtb: banks=${BPU_ABTB_BANKS} entries=${BPU_ABTB_ENTRIES}"
+echo "[bpu] sbtb: banks=${BPU_SBTB_BANKS} ways=${BPU_SBTB_WAYS} sets=${BPU_SBTB_SETS}"
 
 exec "${GEM5_BIN}" -d "${OUTDIR}" \
   "${GEM5_LISTENER_ARGS[@]}" \
@@ -139,14 +153,22 @@ exec "${GEM5_BIN}" -d "${OUTDIR}" \
   --bp-type TAGE \
   "${SIM_STOP_ARGS[@]}" \
   -P "system.switch_cpus[0].decoupledBPU = ${BPU_ENABLE}" \
+  -P "system.switch_cpus[0].decoupledBPUVersion = ${BPU_VERSION}" \
   -P "system.switch_cpus[0].decoupledBPUUseTAGE = ${BPU_USE_TAGE}" \
   -P "system.switch_cpus[0].decoupledBPUUseRAS = ${BPU_USE_RAS}" \
   -P "system.switch_cpus[0].decoupledBPUUseITTAGE = ${BPU_USE_ITTAGE}" \
   -P "system.switch_cpus[0].decoupledBPUBurstTicks = ${BPU_BURST_TICKS}" \
+  -P "system.switch_cpus[0].decoupledBPURefillOnFTQEmpty = ${BPU_REFILL_ON_FTQ_EMPTY}" \
   -P "system.switch_cpus[0].decoupledBPUFTQDepth = ${BPU_FTQ_DEPTH}" \
   -P "system.switch_cpus[0].decoupledBPUUBTBEntries = ${BPU_UBTB_ENTRIES}" \
+  -P "system.switch_cpus[0].decoupledBPUTagWidth = ${BPU_TAG_WIDTH}" \
   -P "system.switch_cpus[0].decoupledBPUBTBWays = ${BPU_BTB_WAYS}" \
   -P "system.switch_cpus[0].decoupledBPUBTBSets = ${BPU_BTB_SETS}" \
   -P "system.switch_cpus[0].decoupledBPUBanks = ${BPU_BANKS}" \
+  -P "system.switch_cpus[0].decoupledBPUABTBEntries = ${BPU_ABTB_ENTRIES}" \
+  -P "system.switch_cpus[0].decoupledBPUABTBBanks = ${BPU_ABTB_BANKS}" \
+  -P "system.switch_cpus[0].decoupledBPUSBTBWays = ${BPU_SBTB_WAYS}" \
+  -P "system.switch_cpus[0].decoupledBPUSBTBSets = ${BPU_SBTB_SETS}" \
+  -P "system.switch_cpus[0].decoupledBPUSBTBBanks = ${BPU_SBTB_BANKS}" \
   -P "system.switch_cpus[0].decoupledBPUTTWays = ${BPU_TT_WAYS}" \
   -P "system.switch_cpus[0].decoupledBPUTTSets = ${BPU_TT_SETS}"

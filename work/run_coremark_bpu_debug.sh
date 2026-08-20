@@ -26,11 +26,15 @@ COREMARK_BIN="${COREMARK_BIN:-${COREMARK_DIR}/coremark.exe}"
 # CoreMark's auto-calibration path; set COREMARK_ARGS="" to test no-arg mode.
 COREMARK_ARGS="${COREMARK_ARGS-1}"
 OUTDIR="${OUTDIR:-m5out/coremark-bpu-debug}"
+FETCH_BANK_PLOT="${FETCH_BANK_PLOT:-1}"
+FETCH_BANK_ALIGN_BYTES="${FETCH_BANK_ALIGN_BYTES:-64}"
+DOMINANT_LINE_BTB_ENABLE="${DOMINANT_LINE_BTB_ENABLE:-False}"
+DOMINANT_LINE_BTB_ENTRIES="${DOMINANT_LINE_BTB_ENTRIES:-4096}"
 
 # Set BPU_DEBUG=0 for fast runs.  When disabled, gem5 is launched without
 # --debug-flags/--debug-file, which is much faster than merely moving
 # DEBUG_START_TICK far into the future.
-BPU_DEBUG="${BPU_DEBUG:-1}"
+BPU_DEBUG="${BPU_DEBUG:-0}"
 
 # Keep this high for the first debug run to avoid drowning in cold-start trace.
 # Example:
@@ -58,13 +62,27 @@ BP_TYPE="${BP_TYPE:-TAGE}"
 INDIRECT_BP_TYPE="${INDIRECT_BP_TYPE:-SimpleIndirectPredictor}"
 
 # Decoupled frontend table knobs.  They map to BaseO3CPU.py params.
+BPU_ENABLE_USER_SET="${BPU_ENABLE+x}"
 BPU_ENABLE="${BPU_ENABLE:-True}"
+if [[ -z "${BPU_ENABLE_USER_SET}" ]]; then
+    case "${DOMINANT_LINE_BTB_ENABLE,,}" in
+        1|true|on|yes) BPU_ENABLE=False ;;
+    esac
+fi
+BPU_VERSION="${BPU_VERSION:-1}"
 BPU_BURST_TICKS="${BPU_BURST_TICKS:-24}"
+BPU_REFILL_ON_FTQ_EMPTY="${BPU_REFILL_ON_FTQ_EMPTY:-True}"
 BPU_FTQ_DEPTH="${BPU_FTQ_DEPTH:-64}"
 BPU_UBTB_ENTRIES="${BPU_UBTB_ENTRIES:-128}"
+BPU_TAG_WIDTH="${BPU_TAG_WIDTH:-16}"
 BPU_BTB_WAYS="${BPU_BTB_WAYS:-4}"
 BPU_BTB_SETS="${BPU_BTB_SETS:-4096}"
 BPU_BANKS="${BPU_BANKS:-4}"
+BPU_ABTB_ENTRIES="${BPU_ABTB_ENTRIES:-8192}"
+BPU_ABTB_BANKS="${BPU_ABTB_BANKS:-4}"
+BPU_SBTB_WAYS="${BPU_SBTB_WAYS:-4}"
+BPU_SBTB_SETS="${BPU_SBTB_SETS:-4096}"
+BPU_SBTB_BANKS="${BPU_SBTB_BANKS:-4}"
 BPU_TT_WAYS="${BPU_TT_WAYS:-2}"
 BPU_TT_SETS="${BPU_TT_SETS:-1024}"
 
@@ -115,9 +133,19 @@ else
     echo "[gem5] debug trace: ${OUTDIR}/decoupled_bpu.trace"
 fi
 echo "[gem5] stats: ${OUTDIR}/stats.txt"
+echo "[gem5] fetch-bank plot: ${FETCH_BANK_PLOT}"
+echo "[gem5] fetch-bank align: ${FETCH_BANK_ALIGN_BYTES} bytes"
+echo "[gem5] dominant-line BTB: ${DOMINANT_LINE_BTB_ENABLE}"
+echo "[gem5] dominant-line BTB entries: ${DOMINANT_LINE_BTB_ENTRIES}"
 echo "[coremark] binary: ${COREMARK_BIN} (${COREMARK_BIN_INFO})"
 echo "[coremark] args: ${COREMARK_ARGS:-<none>}"
 echo "[bpu] decoupled: ${BPU_ENABLE}"
+echo "[bpu] version: ${BPU_VERSION}"
+echo "[bpu] refill-on-ftq-empty: ${BPU_REFILL_ON_FTQ_EMPTY}"
+echo "[bpu] tag-width: ${BPU_TAG_WIDTH}"
+echo "[bpu] btb: banks=${BPU_BANKS} ways=${BPU_BTB_WAYS} sets=${BPU_BTB_SETS}"
+echo "[bpu] abtb: banks=${BPU_ABTB_BANKS} entries=${BPU_ABTB_ENTRIES}"
+echo "[bpu] sbtb: banks=${BPU_SBTB_BANKS} ways=${BPU_SBTB_WAYS} sets=${BPU_SBTB_SETS}"
 echo "[coremark] stdout: ${COREMARK_STDOUT}"
 echo "[coremark] stderr: ${COREMARK_STDERR}"
 
@@ -141,7 +169,7 @@ if [[ -n "${COREMARK_ARGS}" ]]; then
     SE_CMD_ARGS+=(--options="${COREMARK_ARGS}")
 fi
 
-exec "${GEM5_BIN}" \
+"${GEM5_BIN}" \
     --outdir="${OUTDIR}" \
     "${GEM5_DEBUG_ARGS[@]}" \
     "${SE_CONFIG}" \
@@ -152,15 +180,33 @@ exec "${GEM5_BIN}" \
     "${SE_CMD_ARGS[@]}" \
     "${SE_IO_ARGS[@]}" \
     "${SE_STOP_ARGS[@]}" \
+    -P system.cpu[0].fetchBankAlignBytes="${FETCH_BANK_ALIGN_BYTES}" \
+    -P system.cpu[0].dominantLinePredictor="${DOMINANT_LINE_BTB_ENABLE}" \
+    -P system.cpu[0].dominantLineBtbEntries="${DOMINANT_LINE_BTB_ENTRIES}" \
     -P system.cpu[0].decoupledBPU="${BPU_ENABLE}" \
+    -P system.cpu[0].decoupledBPUVersion="${BPU_VERSION}" \
     -P system.cpu[0].decoupledBPUUseTAGE="${BPU_USE_TAGE}" \
     -P system.cpu[0].decoupledBPUUseRAS="${BPU_USE_RAS}" \
     -P system.cpu[0].decoupledBPUUseITTAGE="${BPU_USE_ITTAGE}" \
     -P system.cpu[0].decoupledBPUBurstTicks="${BPU_BURST_TICKS}" \
+    -P system.cpu[0].decoupledBPURefillOnFTQEmpty="${BPU_REFILL_ON_FTQ_EMPTY}" \
     -P system.cpu[0].decoupledBPUFTQDepth="${BPU_FTQ_DEPTH}" \
     -P system.cpu[0].decoupledBPUUBTBEntries="${BPU_UBTB_ENTRIES}" \
+    -P system.cpu[0].decoupledBPUTagWidth="${BPU_TAG_WIDTH}" \
     -P system.cpu[0].decoupledBPUBTBWays="${BPU_BTB_WAYS}" \
     -P system.cpu[0].decoupledBPUBTBSets="${BPU_BTB_SETS}" \
     -P system.cpu[0].decoupledBPUBanks="${BPU_BANKS}" \
+    -P system.cpu[0].decoupledBPUABTBEntries="${BPU_ABTB_ENTRIES}" \
+    -P system.cpu[0].decoupledBPUABTBBanks="${BPU_ABTB_BANKS}" \
+    -P system.cpu[0].decoupledBPUSBTBWays="${BPU_SBTB_WAYS}" \
+    -P system.cpu[0].decoupledBPUSBTBSets="${BPU_SBTB_SETS}" \
+    -P system.cpu[0].decoupledBPUSBTBBanks="${BPU_SBTB_BANKS}" \
     -P system.cpu[0].decoupledBPUTTWays="${BPU_TT_WAYS}" \
     -P system.cpu[0].decoupledBPUTTSets="${BPU_TT_SETS}"
+
+if [[ "${FETCH_BANK_PLOT,,}" != "0" &&
+      "${FETCH_BANK_PLOT,,}" != "false" &&
+      "${FETCH_BANK_PLOT,,}" != "off" &&
+      "${FETCH_BANK_PLOT,,}" != "no" ]]; then
+    python3 work/plot_fetch_bank_dist.py "${OUTDIR}"
+fi

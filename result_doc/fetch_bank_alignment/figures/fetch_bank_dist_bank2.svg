@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="708" viewBox="0 0 980 708">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="490.0" y="30" font-family="Arial, sans-serif" font-size="20" font-weight="700" text-anchor="middle" fill="#202124">Fetch / FTQ 16-byte bank distribution</text>
+<text x="82" y="62" font-family="Arial, sans-serif" font-size="16" font-weight="700" text-anchor="start" fill="#202124">Fetch buffer request starts</text>
+<line x1="82" y1="198" x2="902" y2="198" stroke="#c7cbd1" stroke-width="1"/>
+<line x1="82" y1="78" x2="82" y2="198" stroke="#c7cbd1" stroke-width="1"/>
+<text x="72" y="82" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="end" fill="#202124">2365737</text>
+<text x="72" y="202" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="end" fill="#202124">0</text>
+<rect x="130.5" y="78.0" width="108.0" height="120.0" rx="3" fill="#2f6fbb"/>
+<text x="184.5" y="72.0" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">2365737</text>
+<text x="184.5" y="220" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">0-15</text>
+<text x="184.5" y="238" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">39.8%</text>
+<rect x="335.5" y="112.4" width="108.0" height="85.6" rx="3" fill="#2f6fbb"/>
+<text x="389.5" y="106.44098815717892" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">1686751</text>
+<text x="389.5" y="220" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">16-31</text>
+<text x="389.5" y="238" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">28.4%</text>
+<rect x="540.5" y="137.8" width="108.0" height="60.2" rx="3" fill="#2f6fbb"/>
+<text x="594.5" y="131.75061471330076" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">1187785</text>
+<text x="594.5" y="220" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">32-47</text>
+<text x="594.5" y="238" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">20.0%</text>
+<rect x="745.5" y="162.4" width="108.0" height="35.6" rx="3" fill="#2f6fbb"/>
+<text x="799.5" y="156.44125445896987" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">701022</text>
+<text x="799.5" y="220" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">48-63</text>
+<text x="799.5" y="238" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">11.8%</text>
+<text x="920" y="198" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start" fill="#202124">total 5941295</text>
+<line x1="42" y1="241.0" x2="938" y2="241.0" stroke="#eef0f2" stroke-width="1"/>
+<text x="82" y="272" font-family="Arial, sans-serif" font-size="16" font-weight="700" text-anchor="start" fill="#202124">FTQ span starts</text>
+<line x1="82" y1="408" x2="902" y2="408" stroke="#c7cbd1" stroke-width="1"/>
+<line x1="82" y1="288" x2="82" y2="408" stroke="#c7cbd1" stroke-width="1"/>
+<text x="72" y="292" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="end" fill="#202124">19397845</text>
+<text x="72" y="412" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="end" fill="#202124">0</text>
+<rect x="130.5" y="382.0" width="108.0" height="26.0" rx="3" fill="#d2691e"/>
+<text x="184.5" y="375.96344800156925" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">4208775</text>
+<text x="184.5" y="430" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">0-15</text>
+<text x="184.5" y="448" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">10.2%</text>
+<rect x="335.5" y="349.6" width="108.0" height="58.4" rx="3" fill="#d2691e"/>
+<text x="389.5" y="343.618648875687" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">9437270</text>
+<text x="389.5" y="430" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">16-31</text>
+<text x="389.5" y="448" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">22.9%</text>
+<rect x="540.5" y="288.0" width="108.0" height="120.0" rx="3" fill="#d2691e"/>
+<text x="594.5" y="282.0" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">19397845</text>
+<text x="594.5" y="430" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">32-47</text>
+<text x="594.5" y="448" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">47.0%</text>
+<rect x="745.5" y="357.0" width="108.0" height="51.0" rx="3" fill="#d2691e"/>
+<text x="799.5" y="350.9784478636673" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">8247568</text>
+<text x="799.5" y="430" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">48-63</text>
+<text x="799.5" y="448" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">20.0%</text>
+<text x="920" y="408" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start" fill="#202124">total 41291458</text>
+<line x1="42" y1="451.0" x2="938" y2="451.0" stroke="#eef0f2" stroke-width="1"/>
+<text x="82" y="482" font-family="Arial, sans-serif" font-size="16" font-weight="700" text-anchor="start" fill="#202124">FTQ touched/read banks</text>
+<line x1="82" y1="618" x2="902" y2="618" stroke="#c7cbd1" stroke-width="1"/>
+<line x1="82" y1="498" x2="82" y2="618" stroke="#c7cbd1" stroke-width="1"/>
+<text x="72" y="502" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="end" fill="#202124">34559431</text>
+<text x="72" y="622" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="end" fill="#202124">0</text>
+<rect x="130.5" y="503.4" width="108.0" height="114.6" rx="3" fill="#2f8f6f"/>
+<text x="184.5" y="497.3835469686986" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">33008995</text>
+<text x="184.5" y="640" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">0-15</text>
+<text x="184.5" y="658" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">28.6%</text>
+<rect x="335.5" y="560.2" width="108.0" height="57.8" rx="3" fill="#2f8f6f"/>
+<text x="389.5" y="554.2256217123482" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">16638747</text>
+<text x="389.5" y="640" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">16-31</text>
+<text x="389.5" y="658" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">14.4%</text>
+<rect x="540.5" y="509.6" width="108.0" height="108.4" rx="3" fill="#2f8f6f"/>
+<text x="594.5" y="503.57696143782" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">31225321</text>
+<text x="594.5" y="640" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">32-47</text>
+<text x="594.5" y="658" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">27.1%</text>
+<rect x="745.5" y="498.0" width="108.0" height="120.0" rx="3" fill="#2f8f6f"/>
+<text x="799.5" y="492.0" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="middle" fill="#202124">34559431</text>
+<text x="799.5" y="640" font-family="Arial, sans-serif" font-size="13" font-weight="400" text-anchor="middle" fill="#202124">48-63</text>
+<text x="799.5" y="658" font-family="Arial, sans-serif" font-size="11" font-weight="400" text-anchor="middle" fill="#202124">29.9%</text>
+<text x="920" y="618" font-family="Arial, sans-serif" font-size="12" font-weight="400" text-anchor="start" fill="#202124">total 115432494</text>
+</svg>

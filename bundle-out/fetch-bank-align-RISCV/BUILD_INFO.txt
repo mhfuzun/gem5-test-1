@@ -1,0 +1,22 @@
+Container userspace:
+NAME="Linux Mint"
+VERSION="22.2 (Zara)"
+ID=linuxmint
+ID_LIKE="ubuntu debian"
+PRETTY_NAME="Linux Mint 22.2"
+VERSION_ID="22.2"
+HOME_URL="https://www.linuxmint.com/"
+SUPPORT_URL="https://forums.linuxmint.com/"
+BUG_REPORT_URL="http://linuxmint-troubleshooting-guide.readthedocs.io/en/latest/"
+PRIVACY_POLICY_URL="https://www.linuxmint.com/"
+VERSION_CODENAME=zara
+UBUNTU_CODENAME=noble
+
+Compiler:
+g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
+
+Python:
+Python 3.12.3
+
+Binary:
+/home/tarator/github_repos/gem5-test-1/build/RISCV/gem5.opt

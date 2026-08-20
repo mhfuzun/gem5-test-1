@@ -41,6 +41,7 @@ boot-tests/*.img
 boot-tests/bbl
 boot-tests/bootloader-*
 work/*.img
+/bundle-out/*.tar.gz
 
 *.pyc
 m5out

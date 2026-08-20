@@ -120,14 +120,74 @@ BPredUnit::predict(const StaticInstPtr &inst, const InstSeqNum &seqNum,
     return taken;
 }
 
+bool
+BPredUnit::predictWithPC(const StaticInstPtr &inst,
+                         const InstSeqNum &seqNum,
+                         PCStateBase &pc, ThreadID tid, Addr predictor_pc,
+                         const PCStateBase *taken_target)
+{
+    PredictorHistory* bpu_history = nullptr;
+    bool taken = predict(inst, seqNum, pc, tid, bpu_history, predictor_pc,
+                         taken_target);
+
+    assert(bpu_history != nullptr);
+
+    predHist[tid].push_front(bpu_history);
+
+    DPRINTF(Branch, "[tid:%i] [sn:%llu] History entry added with "
+            "predictor PC %#x. predHist.size(): %i\n",
+            tid, seqNum, predictor_pc, predHist[tid].size());
+
+    return taken;
+}
+
+bool
+BPredUnit::predictNotTakenWithPC(const StaticInstPtr &inst,
+                                 const InstSeqNum &seqNum,
+                                 PCStateBase &pc, ThreadID tid,
+                                 Addr predictor_pc)
+{
+    BranchType brType = getBranchType(inst);
+    PredictorHistory* hist = new PredictorHistory(tid, seqNum,
+                                                  predictor_pc, inst);
+
+    stats.lookups[tid][brType]++;
+    stats.targetProvider[tid][TargetProvider::NoTarget]++;
+    ppBranches->notify(1);
+
+    hist->condPred = false;
+    hist->predTaken = false;
+    hist->actuallyTaken = false;
+    hist->targetProvider = TargetProvider::NoTarget;
+    set(hist->target, pc);
+    inst->advancePC(*hist->target);
+
+    branchPlaceholder(tid, predictor_pc, inst->isUncondCtrl(),
+                      hist->bpHistory);
+    updateHistories(tid, hist->pc, hist->uncond, false,
+                    hist->target->instAddr(), hist->inst, hist->bpHistory);
+
+    set(pc, *hist->target);
+    predHist[tid].push_front(hist);
+
+    DPRINTF(Branch, "[tid:%i] [sn:%llu] Not-taken placeholder added "
+            "with predictor PC %#x. predHist.size(): %i\n",
+            tid, seqNum, predictor_pc, predHist[tid].size());
+
+    return false;
+}
+
 
 
 
 bool
 BPredUnit::predict(const StaticInstPtr &inst, const InstSeqNum &seqNum,
-                   PCStateBase &pc, ThreadID tid, PredictorHistory* &hist)
+                   PCStateBase &pc, ThreadID tid, PredictorHistory* &hist,
+                   Addr predictor_pc, const PCStateBase *taken_target)
 {
     assert(hist == nullptr);
+    const Addr lookup_pc = predictor_pc == MaxAddr ?
+        pc.instAddr() : predictor_pc;
 
 
     // See if branch predictor predicts taken.
@@ -136,7 +196,7 @@ BPredUnit::predict(const StaticInstPtr &inst, const InstSeqNum &seqNum,
     // if prediction was wrong.
 
     BranchType brType = getBranchType(inst);
-    hist = new PredictorHistory(tid, seqNum, pc.instAddr(), inst);
+    hist = new PredictorHistory(tid, seqNum, lookup_pc, inst);
 
     stats.lookups[tid][brType]++;
     ppBranches->notify(1);
@@ -156,7 +216,7 @@ BPredUnit::predict(const StaticInstPtr &inst, const InstSeqNum &seqNum,
     } else {
         // Conditional branches -------
         ++stats.condPredicted;
-        hist->condPred = lookup(tid, pc.instAddr(), hist->bpHistory);
+        hist->condPred = lookup(tid, lookup_pc, hist->bpHistory);
 
         if (hist->condPred) {
             ++stats.condPredictedTaken;
@@ -183,7 +243,7 @@ BPredUnit::predict(const StaticInstPtr &inst, const InstSeqNum &seqNum,
      * chance to detect a branch without a BTB hit.
      */
     stats.BTBLookups++;
-    const PCStateBase * btb_target = btb->lookup(tid, pc.instAddr(), brType);
+    const PCStateBase * btb_target = btb->lookup(tid, lookup_pc, brType);
     if (btb_target) {
         stats.BTBHits++;
         hist->btbHit = true;
@@ -263,7 +323,7 @@ BPredUnit::predict(const StaticInstPtr &inst, const InstSeqNum &seqNum,
         ++stats.indirectLookups;
 
         std::unique_ptr<const PCStateBase> itarget(
-            iPred->lookup(tid, seqNum, pc.instAddr(),
+            iPred->lookup(tid, seqNum, lookup_pc,
                           hist->indirectHistory));
 
         if (itarget) {
@@ -280,8 +340,13 @@ BPredUnit::predict(const StaticInstPtr &inst, const InstSeqNum &seqNum,
             ++stats.indirectMisses;
             DPRINTF(Branch,
                     "[tid:%i, sn:%llu] PC:%#x no indirect target\n",
-                    tid, seqNum, pc.instAddr());
+                    tid, seqNum, lookup_pc);
         }
+    }
+
+    if (taken_target && hist->condPred) {
+        set(hist->target, *taken_target);
+        hist->targetProvider = TargetProvider::BTB;
     }
 
 
