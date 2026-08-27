@@ -360,6 +360,25 @@ class MyTAGE(BranchPredictor):
     ghistoryLength = Param.Unsigned(128, "Global history length")
     pchistoryLength = Param.Unsigned(32, "Path history length")
     compCount = Param.Unsigned(4, "Number of tagged components")
+    entryPerSet = Param.Unsigned(
+        8, "Number of offset/tag entries read from each table row"
+    )
+    fetchLineBytes = Param.Unsigned(
+        64, "Aligned fetch-line size used by MyTAGE multi-entry lookup"
+    )
+    bimodalCtrsPerRow = Param.Unsigned(
+        8, "Number of bimodal 2-bit counters stored in each aligned-PC row"
+    )
+    bimodalOffsetShift = Param.Unsigned(
+        2,
+        "Right shift applied to the fetch-line PC offset for bimodal bank select",
+    )
+    bimodalUseAlignedAddr = Param.Bool(
+        True, "Use aligned PC instead of instruction PC for bimodal row index"
+    )
+    tagUseAlignedAddr = Param.Bool(
+        True, "Use aligned PC instead of instruction PC for tagged-table tags"
+    )
 
     # PC hash settings
     pcHashStartForIdx = Param.Unsigned(2, "PC hash start bit for index")
@@ -384,6 +403,28 @@ class MyTAGE(BranchPredictor):
     lfsrSeed = Param.Unsigned(0xACE1, "Seed used for LFSR or rand()")
     lfsrMispredictionUpdate = Param.Bool(
         True, "Update LFSR state on misprediction"
+    )
+    historyHashType = Param.String(
+        "FOLDED", "History hash implementation: FOLDED or CSR"
+    )
+    replacementMode = Param.String(
+        "USEFUL", "Tagged-entry replacement policy: USEFUL or PLRU"
+    )
+    useAltOnNA = Param.Bool(
+        False, "Use alternate prediction for weak newly allocated providers"
+    )
+    numUseAltOnNa = Param.Unsigned(
+        1, "Number of use-alt-on-newly-allocated chooser counters"
+    )
+    useAltOnNaBits = Param.Unsigned(
+        4, "Signed counter width for use-alt-on-newly-allocated"
+    )
+    useAltOnNaHashStart = Param.Unsigned(
+        2, "PC hash start bit for use-alt-on-newly-allocated chooser"
+    )
+    useAltOnNaHashWidth = Param.Unsigned(
+        0,
+        "PC hash width for use-alt-on-newly-allocated chooser; 0 derives from table size",
     )
 
     # Per-table vectors (size must match compCount)

@@ -40,7 +40,7 @@
 
 Import('*')
 
-env.Append(CPPPATH=Dir('myTagePred/include'))
+env.Append(CPPPATH=Dir('#src/cpu/pred/myTage_multi_entry/include'))
 
 
 SimObject('BranchPredictor.py',
@@ -88,9 +88,10 @@ Source('tage_sc_l_64KB.cc')
 Source('btb.cc')
 Source('simple_btb.cc')
 Source('my_tage.cc')
-Source('myTagePred/src/tage.cc')
-Source('myTagePred/src/bimodal.cc')
-Source('myTagePred/src/ghistory.cc')
+Source('myTage_multi_entry/src/tage.cc')
+Source('myTage_multi_entry/src/bimodal.cc')
+Source('myTage_multi_entry/src/ghistory.cc')
+Source('myTage_multi_entry/src/ghistory_register.cc')
 DebugFlag('Indirect')
 DebugFlag('BTB')
 DebugFlag('RAS')

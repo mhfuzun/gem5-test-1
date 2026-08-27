@@ -1,0 +1,5 @@
+bin
+gem5
+lib
+python
+*.tar.gz
