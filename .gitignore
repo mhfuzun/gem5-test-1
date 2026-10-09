@@ -36,3 +36,11 @@ configs/dram/lowp_sweep.cfg
 .vscode
 typings
 .DS_Store
+
+/bundle-out
+/work_log
+/work
+/work/coremark_analysis
+/work/ubuntu-riscv.raw.img
+README_log.md
+frontend_design.pdf

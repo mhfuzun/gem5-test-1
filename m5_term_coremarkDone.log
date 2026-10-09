@@ -1,0 +1,40 @@
+==== m5 terminal: Terminal 0 ====
+[?2004hroot@tarator-pc:/data# ./m5ops checkpoint[6Phelpcheckpoint[Kls
+[?2004l
+coremark_500iter  coremark_debug  lost+found  m5ops  var
+[?2004hroot@tarator-pc:/data# ./mp[K5oğp[K[Kps help
+[?2004l
+Kullanim: ./m5ops <komut>
+
+Gecerli Komutlar:
+  reset      : Istatistikleri sifirlar (m5_reset_stats)
+  dump       : Istatistikleri kaydeder (m5_dump_stats)
+  dumpreset  : Istatistikleri kaydeder ve hemen sifirlar
+  checkpoint : Simulasyon checkpoint'i alir (m5_checkpoint)
+  workbegin  : Ilgi alani (ROI - Region of Interest) baslangicini isaretler
+  workend    : Ilgi alani (ROI) bitisini isaretler
+  help       : Bu yardim menusunu gosterir
+[?2004hroot@tarator-pc:/data# ./m5ops rest[Ket && echo ""[Ks[Ksim started" && ./coremark_500iter && echo "done[K[K[K[K[K[K[K[K[K[K./m5ops dump && echo "d[Ksim doneé[K!"
+[?2004l
+[GEM5] Istatistikler sifirlaniyor...
+sim started
+2K performance run parameters for coremark.
+CoreMark Size    : 666
+Total ticks      : 12971
+Total time (secs): 12.971000
+Iterations/Sec   : 462.570349
+Iterations       : 6000
+Compiler version : GCC13.3.0
+Compiler flags   : -O2 -O2 -static -march=rv64gc -mabi=lp64d -DCORE_DEBUG=0 -DITERATIONS=500  -lrt
+Memory location  : Please put data memory location here
+			(e.g. code in flash, data on heap etc)
+seedcrc          : 0xe9f5
+[0]crclist       : 0xe714
+[0]crcmatrix     : 0x1fd7
+[0]crcstate      : 0x8e3a
+[0]crcfinal      : 0xa14c
+Correct operation validated. See README.md for run and reporting rules.
+CoreMark 1.0 : 462.570349 / GCC13.3.0 -O2 -O2 -static -march=rv64gc -mabi=lp64d -DCORE_DEBUG=0 -DITERATIONS=500  -lrt / Heap
+[GEM5] Istatistikler kaydediliyor (dump)...
+sim done!
+[?2004hroot@tarator-pc:/data#
