@@ -1,0 +1,416 @@
+' Design proposal. Existing gem5 classes are explicitly marked.
+' Two views: integration/ownership, then the shared data contracts.
+@startuml class_diagram_v2
+title IBPU - gem5 O3 integration / multi-block fetch
+top to bottom direction
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam linetype ortho
+hide empty members
+
+legend left
+  |= Stereotype |= Meaning |
+  | existing | Existing gem5 code |
+  | extend | Small integration changes |
+  | new | New helper or interface |
+  | optional | Additional timing/recovery support |
+endlegend
+
+package "Python configuration" {
+    class BaseO3CPU <<extend>> {
+        +decoupledFrontEnd: bool
+        +bpuModel: IBPU = NULL
+        +numFTQEntries: unsigned
+        +maxFetchBlocksPerCycle: unsigned
+        +maxTakenFetchPerCycle: unsigned
+    }
+}
+
+package "BPU boundary - no O3 / FTQ dependency" {
+    interface IBPU <<new SimObject>> {
+        +reset(tid, startPC): void
+        +tick(now: Cycles, credits: FrontendCredits): void
+        +canSupply(now: Cycles): bool
+        +peekFetchTarget(): const BpuFetchTargetPtr
+        +acceptFetchTarget(key, now: Cycles): void
+        +peekOverride(now: Cycles): optional<OverrideEvent>
+        +ackOverride(eventId): void
+        +onPredecodeFeedback(fb): PredictionBinding
+        +onCommitUpdate(upd: CommitUpdate): void
+        +onRecovery(event: RecoveryEvent): void
+        +onTargetConsumed(key): void
+        +beginDrain(): void
+        +resume(): void
+        +isDrained(): bool
+        +nextWakeup(): optional<Cycles>
+    }
+
+    abstract class BufferedBPU <<new optional base>> {
+        #responses: ResponseQueue
+        #ledger: PredictionLedger
+        #history: BpuHistory
+        +tick(now, credits): void
+    }
+
+    class ResponseQueue <<new>> {
+        -readyData: BpuFetchTarget[]
+        -controlEvents: OverrideEvent[]
+        +peekReady(now): BpuFetchTargetPtr
+        +accept(key): void
+        +invalidateYounger(cut): void
+    }
+
+    class PredictionLedger <<new>> {
+        -bindings: InstSeqNum -> BranchRef
+        -tokens: PredictionKey -> private metadata
+        +bind(fb): PredictionBinding
+        +commitThrough(tid, seq): void
+        +recover(event): void
+        +markFetchConsumed(key): void
+    }
+
+    class BpuHistory <<new>> {
+        +checkpoint(): HistoryHandle
+        +advance(prediction): void
+        +restore(handle): void
+    }
+}
+
+package "Selectable models and their private BTBs" {
+    class SingleTakenLineBPU <<new>>
+    class TwoTakenBPU <<new>>
+    class CustomBPU <<new>>
+
+    interface IBTB <<optional internal API>> {
+        +lookup(query: BTBQuery): BTBResult
+        +update(info: BTBUpdate): void
+        +reset(): void
+    }
+    class SingleLineBTB
+    class TwoTakenBTB
+    class UBTB
+    class MBTB
+}
+
+package "O3 integration" {
+    class BAC <<existing / extend>> {
+        +tick(): void
+        +updatePC(inst, pc, ft): bool
+        +checkAndUpdateBPUSignals(tid): bool
+        +clearStates(tid): void
+        +isDrained(): bool
+    }
+
+    class Gem5BpuBridge <<new>> {
+        -model: IBPU
+        -ftq: FTQ
+        +service(now, credits): void
+        +makeFT(payload): FetchTargetPtr
+        +bindAndPredict(inst, cursor): FetchDecision
+        +finishBlock(cursor): void
+        +forwardFeedback(timeBuffer): void
+        +applyOverride(event): void
+        +resetAndDrainHooks(): void
+    }
+
+    class "gem5::o3::FetchTarget" as FT <<existing / extend>> {
+        +ftSeqNum: FTSeqNum
+        +payload: const BpuFetchTargetPtr
+        +block(index): const FetchBlock
+        +blockCount(): unsigned
+        +legacyFields: retained for legacy mode
+    }
+
+    class FTQ <<existing / extend>> {
+        -entries: list<FetchTargetPtr>
+        +insert(tid, ft): void
+        +readHead(tid): FetchTargetPtr
+        +popHead(tid): bool
+        +squash(tid): void
+        +squashAfter(cut): void
+        +replaceSuffix(cut, blocks): void
+    }
+
+    class Fetch <<existing / extend>> {
+        +fetch(): void
+        +fetchCacheLine(vaddr, tid, pc): bool
+        +finishTranslation(fault, req): void
+        +processCacheCompletion(pkt): void
+        +buildInst(...): DynInstPtr
+    }
+
+    class BlockFetchEngine <<new>> {
+        -cursor: BlockCursor
+        -stream: MergedFetchStream
+        -outstanding: RequestTag -> fragment
+        +begin(ft): void
+        +nextRead(): optional<FetchRead>
+        +onBytes(tag, bytes): void
+        +onFault(tag, fault): void
+        +peekDecodeSlice(): optional<FetchSlice>
+        +advance(nextPC, decodedBytes): void
+        +blockDone(): bool
+        +targetDone(): bool
+        +invalidateYounger(cut): void
+    }
+
+    class MergedFetchStream <<new>> {
+        -segments: ordered PC-tagged byte slices
+        +append(blockIndex, fragment): void
+        +peekReadyPrefix(): optional<FetchSlice>
+        +consume(bytes): void
+    }
+
+    class "fetchQueue -> FetchStruct -> Decode" as DecodePath <<existing>>
+
+    class O3OverrideHook <<optional>> {
+        +requestSquash(cut, restartPC): void
+        +arbitrateWithExistingRecovery(): void
+    }
+}
+
+BaseO3CPU --> IBPU : selects one model
+BaseO3CPU ..> BAC : parameters
+IBPU <|.. BufferedBPU
+BufferedBPU <|-- SingleTakenLineBPU
+BufferedBPU <|-- TwoTakenBPU
+BufferedBPU <|-- CustomBPU
+BufferedBPU *-- ResponseQueue
+BufferedBPU *-- PredictionLedger
+BufferedBPU *-- BpuHistory
+SingleTakenLineBPU *-- SingleLineBTB
+TwoTakenBPU *-- TwoTakenBTB
+CustomBPU *-- UBTB
+CustomBPU *-- MBTB
+IBTB <|.. SingleLineBTB
+IBTB <|.. TwoTakenBTB
+IBTB <|.. UBTB
+IBTB <|.. MBTB
+
+BAC *-- Gem5BpuBridge
+Gem5BpuBridge --> IBPU : supply / feedback
+Gem5BpuBridge --> FTQ : admission / recovery
+FTQ "1" o-- "0..N" FT
+Fetch --> FTQ : read head / consume whole target
+Fetch --> BAC : decoded instruction / updatePC
+Fetch *-- BlockFetchEngine
+BlockFetchEngine --> FT : ordered blocks
+BlockFetchEngine *-- MergedFetchStream
+Fetch --> DecodePath : existing DynInst stream
+Gem5BpuBridge ..> O3OverrideHook : late published-path correction
+
+note right of IBPU
+  Virtual C++ contract, virtual destructor.
+  Python selects the implementation once.
+  peek is stable; accept is called only after FTQ insertion.
+  tick and control events run even when FTQ is full.
+  BPU owns prediction/history state; O3 owns memory requests.
+end note
+
+note bottom of IBTB
+  Optional reusable API, not a required hardware topology.
+  Each model owns its BTBs, indexing, ports and timing.
+  Other designs may implement IBPU directly.
+end note
+
+note bottom of PredictionLedger
+  History survives FTQ pop until its model-defined release point.
+  FTSeqNum, prediction IDs and InstSeqNum are distinct domains.
+  GHR / PHR / RAS / indirect state remain model-private.
+end note
+
+note right of BlockFetchEngine
+  Minimum-change mode: one outstanding demand request/thread.
+  Fetch every required fragment, merge in predicted block order.
+  Stream a ready prefix; preserve true PC and block boundaries.
+  Multiple outstanding requests need additional Fetch changes.
+end note
+
+note bottom of FTQ
+  One entry = one BpuFetchTarget, not one FetchBlock.
+  Keep queue/probes; extend payload and selective recovery.
+  Never describe disjoint blocks as one [minPC, maxPC] range.
+end note
+
+note bottom of O3OverrideHook
+  Required if affected instructions have left Fetch.
+  Early uBTB publication cannot silently omit this case.
+  A predictor override is not a resolved branch outcome.
+end note
+@enduml
+
+@startuml class_diagram_v2_contracts
+title Shared IBPU / multi-block fetch contracts
+top to bottom direction
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+hide empty methods
+
+package "Prediction payload" {
+    class PredictionKey <<value>> {
+        +tid: ThreadID
+        +id: uint64_t
+        +generation: uint64_t
+    }
+    class BpuFetchTarget <<value>> {
+        +key: PredictionKey
+        +readyCycle: Cycles
+        +blocks: FetchBlock[]
+        +nextQueryPC: PCState
+        +history: HistoryHandle
+    }
+    class FetchBlock <<value>> {
+        +startPC: PCState
+        +limitExclusive: Addr
+        +cfis: PredictedCFI[]
+        +exitCfi: optional<CfiId>
+        +nextPC: PCState
+    }
+    class PredictedCFI <<value>> {
+        +id: CfiId
+        +pc: PCState
+        +type: BranchType
+        +taken: bool
+        +target: PCState
+        +length: optional<unsigned>
+        +history: HistoryHandle
+    }
+    class BranchRef <<value>> {
+        +key: PredictionKey
+        +blockIndex: unsigned
+        +cfiId: CfiId
+    }
+}
+
+package "Admission and feedback" {
+    class FrontendCredits <<value>> {
+        +freeFTQGroups: unsigned
+        +insertBudget: unsigned
+        +stopping: bool
+    }
+    class PredecodeFeedback <<value>> {
+        +key: PredictionKey
+        +blockIndex: unsigned
+        +instSeq: InstSeqNum
+        +pc: PCState
+        +inst: StaticInstPtr
+        +matchedCfi: optional<CfiId>
+    }
+    class PredictionBinding <<value>> {
+        +branch: optional<BranchRef>
+        +taken: bool
+        +nextPC: PCState
+        +needsRepair: bool
+    }
+    class FetchDecision <<value>> {
+        +nextPC: PCState
+        +predictedTaken: bool
+        +blockDone: bool
+        +targetDone: bool
+        +needsRepair: bool
+    }
+    class CommitUpdate <<value>> {
+        +tid: ThreadID
+        +throughSeq: InstSeqNum
+    }
+    class RecoveryPoint <<value>> {
+        +key: optional<PredictionKey>
+        +blockIndex: optional<unsigned>
+        +instructionPC: optional<PCState>
+        +instSeq: optional<InstSeqNum>
+        +includeBoundary: bool
+    }
+    class RecoveryEvent <<value>> {
+        +cause: RecoveryCause
+        +tid: ThreadID
+        +cut: RecoveryPoint
+        +restartPC: PCState
+        +resolvedOutcome: optional<BranchOutcome>
+    }
+    class OverrideEvent <<value>> {
+        +eventId: uint64_t
+        +readyCycle: Cycles
+        +cut: RecoveryPoint
+        +replacementSuffix: FetchBlock[]
+        +restartPC: PCState
+        +nextQueryPC: PCState
+    }
+}
+
+package "Fetch assembly" {
+    class BlockCursor <<value>> {
+        +key: PredictionKey
+        +blockIndex: unsigned
+        +pc: PCState
+        +byteOffset: unsigned
+    }
+    class RequestTag <<value>> {
+        +key: PredictionKey
+        +blockIndex: unsigned
+        +fragmentIndex: unsigned
+        +requestId: uint64_t
+    }
+    class FetchRead <<value>> {
+        +tag: RequestTag
+        +vaddr: Addr
+        +size: unsigned
+        +instructionPC: PCState
+    }
+    class FetchSlice <<value>> {
+        +tag: RequestTag
+        +vaddr: Addr
+        +bytes: byte[]
+        +validRange: ByteRange
+        +fault: optional<Fault>
+    }
+}
+
+BpuFetchTarget *-- PredictionKey
+BpuFetchTarget "1" *-- "1..N" FetchBlock
+FetchBlock "1" *-- "0..N" PredictedCFI
+BranchRef --> PredictionKey
+PredecodeFeedback --> PredictionKey
+PredictionBinding --> BranchRef
+FetchDecision ..> PredictionBinding : bridge combines with cursor
+RecoveryEvent *-- RecoveryPoint
+OverrideEvent *-- RecoveryPoint
+OverrideEvent --> FetchBlock : corrected suffix
+BlockCursor --> BpuFetchTarget
+FetchSlice *-- RequestTag
+FetchRead *-- RequestTag
+RequestTag --> PredictionKey
+
+note bottom of FetchBlock
+  Blocks are in predicted execution order, not address order.
+  CFI PCs are ordered within each contiguous block.
+  First predicted taken CFI terminates that block.
+  Next block may be distant or revisit the same address.
+  limitExclusive is a byte horizon, not legacy inclusive endPC.
+end note
+
+note bottom of PredecodeFeedback
+  Instruction identity/type/length are now known.
+  Conditional outcome and indirect target are not execution results.
+  Unpredicted CFIs still receive a dynamic binding/history token.
+end note
+
+note bottom of CommitUpdate
+  Existing BAC receives a cumulative doneSeqNum.
+  The ledger stores bindings and corrected predictions until commit.
+  No per-instruction Commit source change is needed for this contract.
+end note
+
+note bottom of RequestTag
+  Reject canceled completions by dynamic request identity.
+  Preserve surviving prefix requests across suffix recovery.
+  A PC or a global epoch alone cannot identify every live request.
+end note
+
+note bottom of FetchSlice
+  Merge preserves address tags and discontinuities.
+  Complete an instruction spanning contiguous byte fragments.
+  Never combine an incomplete instruction across a taken jump.
+end note
+@enduml
