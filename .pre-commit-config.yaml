@@ -37,7 +37,7 @@
 minimum_pre_commit_version: '2.18'
 
 default_language_version:
-    python: python3
+    python: python3.13
 
 exclude: |
     (?x)^(

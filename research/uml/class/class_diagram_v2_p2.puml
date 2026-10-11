@@ -1,0 +1,174 @@
+@startuml class_diagram_v2_contracts
+title Shared IBPU / multi-block fetch contracts
+top to bottom direction
+skinparam classAttributeIconSize 0
+skinparam packageStyle rectangle
+skinparam shadowing false
+hide empty methods
+
+package "Prediction payload" {
+    class PredictionKey <<value>> {
+        +tid: ThreadID
+        +id: uint64_t
+        +generation: uint64_t
+    }
+    class BpuFetchTarget <<value>> {
+        +key: PredictionKey
+        +readyCycle: Cycles
+        +blocks: FetchBlock[]
+        +nextQueryPC: PCState
+        +history: HistoryHandle
+    }
+    class FetchBlock <<value>> {
+        +startPC: PCState
+        +limitExclusive: Addr
+        +cfis: PredictedCFI[]
+        +exitCfi: optional<CfiId>
+        +nextPC: PCState
+    }
+    class PredictedCFI <<value>> {
+        +id: CfiId
+        +pc: PCState
+        +type: BranchType
+        +taken: bool
+        +target: PCState
+        +length: optional<unsigned>
+        +history: HistoryHandle
+    }
+    class BranchRef <<value>> {
+        +key: PredictionKey
+        +blockIndex: unsigned
+        +cfiId: CfiId
+    }
+}
+
+package "Admission and feedback" {
+    class FrontendCredits <<value>> {
+        +freeFTQGroups: unsigned
+        +insertBudget: unsigned
+        +stopping: bool
+    }
+    class PredecodeFeedback <<value>> {
+        +key: PredictionKey
+        +blockIndex: unsigned
+        +instSeq: InstSeqNum
+        +pc: PCState
+        +inst: StaticInstPtr
+        +matchedCfi: optional<CfiId>
+    }
+    class PredictionBinding <<value>> {
+        +branch: optional<BranchRef>
+        +taken: bool
+        +nextPC: PCState
+        +needsRepair: bool
+    }
+    class FetchDecision <<value>> {
+        +nextPC: PCState
+        +predictedTaken: bool
+        +blockDone: bool
+        +targetDone: bool
+        +needsRepair: bool
+    }
+    class CommitUpdate <<value>> {
+        +tid: ThreadID
+        +throughSeq: InstSeqNum
+    }
+    class RecoveryPoint <<value>> {
+        +key: optional<PredictionKey>
+        +blockIndex: optional<unsigned>
+        +instructionPC: optional<PCState>
+        +instSeq: optional<InstSeqNum>
+        +includeBoundary: bool
+    }
+    class RecoveryEvent <<value>> {
+        +cause: RecoveryCause
+        +tid: ThreadID
+        +cut: RecoveryPoint
+        +restartPC: PCState
+        +resolvedOutcome: optional<BranchOutcome>
+    }
+    class OverrideEvent <<value>> {
+        +eventId: uint64_t
+        +readyCycle: Cycles
+        +cut: RecoveryPoint
+        +replacementSuffix: FetchBlock[]
+        +restartPC: PCState
+        +nextQueryPC: PCState
+    }
+}
+
+package "Fetch assembly" {
+    class BlockCursor <<value>> {
+        +key: PredictionKey
+        +blockIndex: unsigned
+        +pc: PCState
+        +byteOffset: unsigned
+    }
+    class RequestTag <<value>> {
+        +key: PredictionKey
+        +blockIndex: unsigned
+        +fragmentIndex: unsigned
+        +requestId: uint64_t
+    }
+    class FetchRead <<value>> {
+        +tag: RequestTag
+        +vaddr: Addr
+        +size: unsigned
+        +instructionPC: PCState
+    }
+    class FetchSlice <<value>> {
+        +tag: RequestTag
+        +vaddr: Addr
+        +bytes: byte[]
+        +validRange: ByteRange
+        +fault: optional<Fault>
+    }
+}
+
+BpuFetchTarget *-- PredictionKey
+BpuFetchTarget "1" *-- "1..N" FetchBlock
+FetchBlock "1" *-- "0..N" PredictedCFI
+BranchRef --> PredictionKey
+PredecodeFeedback --> PredictionKey
+PredictionBinding --> BranchRef
+FetchDecision ..> PredictionBinding : bridge combines with cursor
+RecoveryEvent *-- RecoveryPoint
+OverrideEvent *-- RecoveryPoint
+OverrideEvent --> FetchBlock : corrected suffix
+BlockCursor --> BpuFetchTarget
+FetchSlice *-- RequestTag
+FetchRead *-- RequestTag
+RequestTag --> PredictionKey
+
+note bottom of FetchBlock
+  Blocks are in predicted execution order, not address order.
+  CFI PCs are ordered within each contiguous block.
+  First predicted taken CFI terminates that block.
+  Next block may be distant or revisit the same address.
+  limitExclusive is a byte horizon, not legacy inclusive endPC.
+end note
+
+note bottom of PredecodeFeedback
+  Instruction identity/type/length are now known.
+  Conditional outcome and indirect target are not execution results.
+  Unpredicted CFIs still receive a dynamic binding/history token.
+end note
+
+note bottom of CommitUpdate
+  Existing BAC receives a cumulative doneSeqNum.
+  The ledger stores bindings and corrected predictions until commit.
+  No per-instruction Commit source change is needed for this contract.
+end note
+
+note bottom of RequestTag
+  Reject canceled completions by dynamic request identity.
+  Preserve surviving prefix requests across suffix recovery.
+  A PC or a global epoch alone cannot identify every live request.
+end note
+
+note bottom of FetchSlice
+  Merge preserves address tags and discontinuities.
+  Complete an instruction spanning contiguous byte fragments.
+  Never combine an incomplete instruction across a taken jump.
+end note
+@enduml
