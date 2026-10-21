@@ -116,7 +116,14 @@ class ElfObject : public ObjectFile
 
     Addr bias() const override { return ldBias; }
     bool relocatable() const override { return relocate; }
-    Addr mapSize() const override { return ldMax - ldMin; }
+    Addr
+    mapSize() const override
+    {
+        // ldMin/ldMax stay at their sentinel values if no non-empty
+        // PT_LOAD segment was seen. Returning ldMax - ldMin in that case
+        // would underflow, so report an empty mapping instead.
+        return (ldMin <= ldMax) ? (ldMax - ldMin) : 0;
+    }
     void updateBias(Addr bias_addr) override;
 
     bool hasTLS() override { return sectionExists(".tbss"); }
