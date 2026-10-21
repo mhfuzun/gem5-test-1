@@ -1,0 +1,132 @@
+@startuml bpu_lookahead
+title IBPU internals: m-entry forecast, fast path and timed slow correction
+hide footbox
+autonumber
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 95
+
+legend left
+  [E] Existing gem5 call or signal
+  [N] New IBPU / bridge / helper connection
+  [A] Model algorithm; illustrative private operation
+  This is the custom uBTB/mBTB model, not a required IBPU topology.
+endlegend
+
+participant Gem5BpuBridge as Bridge
+participant "CustomBPU : IBPU" as BPU
+participant "AddressGenerator\nprivate model helper" as AG
+participant "mBTB\nprivate evaluation context" as MBTB
+participant "uBTB" as UBTB
+participant "BpuHistory / PredictionLedger" as History
+participant "ForecastCache\nprivate host optimization" as Forecast
+participant "model pipeline / ResponseQueue" as Responses
+
+Bridge -> BPU : [N] tick(now: Cycles, credits)
+note over BPU, Responses
+  Backend/predecode feedback has already been applied by the bridge.
+  m = host batch size; n = slow-predictor pipeline latency.
+  AddressGenerator/ForecastCache and [A] operations are private helpers,
+  not new O3 stages or existing gem5 APIs.
+end note
+
+group First: progress modeled work already issued
+    BPU -> Responses : [A] collect due completions(now), even if FTQ is full
+    note over BPU
+        bpu tahminlerini queue'dan çağırır.
+    end note
+    loop each due completion, in modeled event/age order
+        Responses --> BPU : [A] (key, source, result, history lineage)
+        alt request was invalidated by an older recovery
+            BPU -> History : [A] release canceled request metadata once
+        else fast result is due
+            BPU -> Responses : [A] publish provisional BpuFetchTarget at ready_u
+        else slow result is due for a still-live source prediction
+            BPU -> History : [A] find the matching fast prediction by key
+            BPU -> BPU : [A] compare CFI identity, direction, target,
+            BPU -> BPU : [A] block boundaries and next-CFI/span
+            alt fast and slow agree
+                BPU -> History : [A] mark slow validation complete
+            else a correction is required
+                BPU -> Responses : [A] enqueue OverrideEvent at ready_m + redirectDelay
+                note over Bridge, BPU
+                  Bridge processes peekOverride() after tick() returns.
+                  Local correction or asynchronous O3 arbitration is shown
+                  in mbtb_late_recover.puml. Wrong-path queries may continue
+                  until the effective override deadline; comparator-time
+                  throttling would be a separate explicit model policy.
+                end note
+            end
+        end
+    end
+    BPU -> Responses : [A] check control events with readyCycle <= now
+    BPU -> BPU : [A] fence affected new issue for a due, still-live override
+    note over BPU, Responses
+      A due override fences new affected queries until bridge arbitration.
+      Before that deadline, redirectDelay does not silently stop the path.
+      Previously issued completions still progress under their own policy.
+    end note
+end
+
+group Second: prepare host forecasts, without publishing future work
+    BPU -> Forecast : [A] check cached candidates and dependency versions
+    alt forecast empty, invalid, or unable to cover the current path
+        BPU -> History : [A] obtain isolated forecast state at source checkpoint
+        BPU -> AG : [A] generateBatch(queryPC, m, forecastState)
+        loop up to m dependent predictions; stop at unknown feedback dependency
+            AG -> MBTB : [N] lookup(BTBQuery{addr = nextQueryPC})
+            MBTB --> AG : [N] BTBResult{cfi_list, commitData}
+            AG -> AG : [A] run model direction/target selection for ordered CFIs
+            AG -> AG : [A] stop block at first taken; form ordered blocks
+            AG -> History : [A] advance forecast-only history/checkpoints
+            AG -> AG : [A] derive nextQueryPC from this prediction
+            AG -> Forecast : [A] cache candidate + dependency versions + metadata
+        end
+        AG --> BPU : [A] batch prepared; no simulated time has elapsed
+    end
+end
+
+group Third: admit new modeled queries only within hardware resources
+    alt issue interval, pipeline/output credits and recovery state allow work
+        BPU -> History : [A] allocate dynamic key and source checkpoint
+        BPU -> UBTB : [N] lookup(BTBQuery{addr = liveQueryPC})
+        UBTB --> BPU : [N] fast prediction candidates
+        BPU -> BPU : [A] record accepted issue_u; schedule fast result
+        BPU -> Forecast : [A] find candidate matching PC, lineage and table/history version
+        alt matching forecast is still valid at slow lookup sampling time
+            Forecast --> BPU : [A] reusable slow candidate and metadata
+        else mismatch, wrong path or intervening relevant training
+            BPU -> MBTB : [N] lookup(query) in the correct modeled context
+            MBTB --> BPU : [N] recomputed slow candidates
+            BPU -> Forecast : [A] invalidate dependent cached suffix
+        end
+        BPU -> Responses : [A] record issue_m and schedule slow completion
+        BPU -> History : [A] apply live speculative updates exactly once,
+        BPU -> History : [A] according to the model's stage/history policy
+    else no modeled capacity, not yet issue time, or affected recovery pending
+        BPU -> BPU : [A] hold new issue; keep ready results and due control events
+    end
+end
+BPU --> Bridge : [N] tick returns; bridge may now handle overrides and ready data
+
+note over BPU, Responses
+  Stall-free example: issue_u = issue_m = 0, latency_u = 1, n = 4.
+  Fast result is visible at cycle 1; slow result is visible at cycle 4.
+  With redirectDelay = 0, provisional-path work may occur in cycles 1..3.
+  The source's slow deadline does not restart when host code detects a mismatch.
+  Accepted slow issue, initiation interval and stage stalls determine ready_m.
+end note
+note over History, Forecast
+  Forecast evaluation must isolate lookup side effects, RAS/history,
+  replacement/random state and statistics from live simulated state.
+  Replay updates only at modeled times; invalidate/recompute on dependencies.
+  m must not grant extra hardware buffer slots or future training knowledge.
+  If frozen-table batching intentionally changes results, label that as an
+  approximate model; it is not equivalent to cycle-by-cycle execution.
+end note
+note over UBTB, Responses
+  Each following accepted fast query uses the live fast-path cursor.
+  On disagreement, it may follow the wrong path until a due override applies.
+  Wrong-path queries need their own keys, history and resource accounting;
+  never compare them by index against unrelated mBTB forecast entries.
+end note
+@enduml

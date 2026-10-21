@@ -1,7 +1,9 @@
 # IBPU üzerinden gem5 entegrasyonu: V2
 
-[Sınıf diyagramı](class_diagram_v2.puml) iki görünüm içerir: bileşenler ve
-sahiplik; ortak veri/feedback sözleşmeleri. Bu bir tasarım önerisidir;
+[Sınıf diyagramı](class_diagram_v2.puml), bileşenleri, BTB arayüzünü ve
+ortak veri/feedback sözleşmelerini tek `@startuml` / `@enduml` içinde
+birleştirir. Önceki `_p1` ve `_p2` dosyalarının yerini alır.
+Bu bir tasarım önerisidir;
 mevcut gem5 kaynakları ve [ilk diyagram](class_diagram.puml) değiştirilmedi.
 İncelenen checkout: `f6026859cd1d258e2060762d470c3e47ef385d13`.
 
@@ -39,6 +41,35 @@ cpu.bpuModel = TwoTakenBPU(btb=TwoTakenBTB(...))
 history ve training sahibi IBPU'dur; eski BPredUnit aynı branch için ayrıca
 çalıştırılmaz. Legacy BPredUnit kullanmak isteyen model kendi adaptörünü
 sağlar. Python yalnızca başlangıç seçimi yapar; cycle başına çağrılmaz.
+
+### BTB düzenlemelerinin gözden geçirilmesi
+
+`BTBQuery`, `BTBResult`, `BTBUpdate` ve `CFI/CFIType` ayrımı korundu.
+Birleştirmede iki farklı `PredictedCFI` tanımı yerine ortak bir tanım
+kullanıldı; aşağıdaki tutarsızlıklar giderildi:
+
+- `CFIType.Brunch`, `Branch` olarak düzeltildi.
+- Instruction uzunluğu yalnızca `CFI.length` içinde tutulur; henüz
+  bilinmeyen uzunluk `optional<unsigned>` ile temsil edilir.
+- Önceki veri sözleşmesindeki `PredictedCFI.pc` korundu. `CFI.offset`,
+  `BTBQuery.addr` tabanından byte cinsinden farktır; BPU gerçek instruction
+  PC'sini bu tabana göre oluşturur. Blok ve CFI adreslemesi aynı birimi
+  kullanır, lookup tabanının seçimi modele aittir.
+- `isAlwaysTaken` koşulsuz kontrol akışını, `isTaken` o sorguda kullanılan
+  tahmini anlatır. BTB direction üretmeyen bir modelde nihai prediction'ı
+  BPU tamamlar. `CFI.isCall`, direct/indirect call ayrımını RAS'a taşır.
+- Lookup metadata'sını update'e geri taşıyabilmek için `BTBUpdate` içine
+  `commitData` eklendi. `void*` opaque arayüz olarak korundu; sahibi BPU'dur,
+  result/update ödünç referans taşır. Metadata dinamik lookup ile eşleşir,
+  bütün kullanıcıları bitince bir kez serbest bırakılır. Önceki hit olmadan
+  allocation yapılırken `NULL` olabilir. Somut C++ implementasyonunda bu
+  yaşam süresi owning bir handle/RAII yardımcıyla yönetilmelidir.
+- `BTBUpdate.cfi_result`, update anındaki gözlenen/training sonucunu taşır;
+  predictor override veya predecode metadata güncellemesi yürütülmüş branch
+  sonucu gibi kullanılmaz. Güncelleme zamanını BPU modeli belirler.
+
+BTB'ler modele özel kalır. Ortak arayüz eklenmesi aynı indexing, tablo
+organizasyonu, history politikası veya latency kullanılmasını gerektirmez.
 
 ## 2. FetchTarget'ın anlamı
 
@@ -143,12 +174,12 @@ CPU event planlamasında clock-domain dönüşümü açık yapılır.
 
 | Dosya / bağlantı | Değişiklik |
 | --- | --- |
-| [BaseO3CPU.py](../../src/cpu/o3/BaseO3CPU.py) | Opsiyonel `bpuModel` parametresi; block/taken fetch bütçeleri. Legacy config korunur. |
-| [bac.hh](../../src/cpu/o3/bac.hh), [bac.cc](../../src/cpu/o3/bac.cc) | `Gem5BpuBridge` sahibi olur. Yeni modda `generateFetchTargets` yerine ready sonuç admission; `updatePC/updatePreDecode` üzerinden CFI binding ve kullanılan prediction; mevcut commit/decode/fetch feedback'ini IBPU'ya iletme. Reset/drain/status da modele yönlenir. |
-| [ftq.hh](../../src/cpu/o3/ftq.hh), [ftq.cc](../../src/cpu/o3/ftq.cc) | FetchTarget'a çok bloklu payload; FTQ kaydını son bloktan sonra pop; IBPU modunda legacy `bpuHistory` kontrolleri yerine consumed/repair kontrolü; early override için selective squash/suffix replacement. |
-| [fetch.hh](../../src/cpu/o3/fetch.hh), [fetch.cc](../../src/cpu/o3/fetch.cc) | `BlockFetchEngine`, aktif block cursor ve PC bilgili buffer. Request completion/translation/retry/fault/squash bağları; bloklar arasında yürütme sırasıyla decode; taken sonrası devam ve hedef bitiş mantığı. |
-| [o3/SConscript](../../src/cpu/o3/SConscript), [pred/SConscript](../../src/cpu/pred/SConscript) | Yeni helper kaynakları ve IBPU SimObject/model kayıtları. |
-| [fdp.cc](../../src/mem/cache/prefetch/fdp.cc), gerektiğinde [fdp.hh](../../src/mem/cache/prefetch/fdp.hh) | FDP kullanılıyorsa prefetch aralıklarını her bloktan al; disjoint bloklar arasını prefetch etme. Suffix iptal/güncellemesini block kimliğiyle ilişkilendir. |
+| [BaseO3CPU.py](../../../src/cpu/o3/BaseO3CPU.py) | Opsiyonel `bpuModel` parametresi; block/taken fetch bütçeleri. Legacy config korunur. |
+| [bac.hh](../../../src/cpu/o3/bac.hh), [bac.cc](../../../src/cpu/o3/bac.cc) | `Gem5BpuBridge` sahibi olur. Yeni modda `generateFetchTargets` yerine ready sonuç admission; `updatePC/updatePreDecode` üzerinden CFI binding ve kullanılan prediction; mevcut commit/decode/fetch feedback'ini IBPU'ya iletme. Reset/drain/status da modele yönlenir. |
+| [ftq.hh](../../../src/cpu/o3/ftq.hh), [ftq.cc](../../../src/cpu/o3/ftq.cc) | FetchTarget'a çok bloklu payload; FTQ kaydını son bloktan sonra pop; IBPU modunda legacy `bpuHistory` kontrolleri yerine consumed/repair kontrolü; early override için selective squash/suffix replacement. |
+| [fetch.hh](../../../src/cpu/o3/fetch.hh), [fetch.cc](../../../src/cpu/o3/fetch.cc) | `BlockFetchEngine`, aktif block cursor ve PC bilgili buffer. Request completion/translation/retry/fault/squash bağları; bloklar arasında yürütme sırasıyla decode; taken sonrası devam ve hedef bitiş mantığı. |
+| [o3/SConscript](../../../src/cpu/o3/SConscript), [pred/SConscript](../../../src/cpu/pred/SConscript) | Yeni helper kaynakları ve IBPU SimObject/model kayıtları. |
+| [fdp.cc](../../../src/mem/cache/prefetch/fdp.cc), gerektiğinde [fdp.hh](../../../src/mem/cache/prefetch/fdp.hh) | FDP kullanılıyorsa prefetch aralıklarını her bloktan al; disjoint bloklar arasını prefetch etme. Suffix iptal/güncellemesini block kimliğiyle ilişkilendir. |
 
 Yeni dosya önerisi: `cpu/pred/DecoupledBPU.py`, `ibpu.hh`,
 `bpu_types.hh`, model implementasyonları ve isteğe bağlı ortak history/queue
@@ -158,18 +189,18 @@ ayrı dosya veya SimObject olmak zorunda değildir.
 
 Mevcut kodda özellikle şu noktalar değişmeden bırakılırsa tasarım işlemez:
 
-- [bac.cc:519](../../src/cpu/o3/bac.cc): model tick'ini yalnızca `Running`
+- [bac.cc:519](../../../src/cpu/o3/bac.cc): model tick'ini yalnızca `Running`
   durumuna bağlamak, FTQ-full altında slow sonuçları/override'ı dondurur.
-- [bac.cc:788](../../src/cpu/o3/bac.cc): yalnızca çıkış branch'inden history
+- [bac.cc:788](../../../src/cpu/o3/bac.cc): yalnızca çıkış branch'inden history
   almak, blok içi çoklu CFI'yı kapsamaz. Phantom/missing CFI ve block sonu
   eşleşmeyen token'lar da `finishBlock` ile denetlenmelidir.
-- [fetch.cc:1196](../../src/cpu/o3/fetch.cc): `!predictedBranch` döngü şartı
+- [fetch.cc:1196](../../../src/cpu/o3/fetch.cc): `!predictedBranch` döngü şartı
   ilk taken'da durur. Yeni modda geçerli sonraki blok, byte hazırlığı ve
   bütçe varsa devam edilmeli; toplam `fetchWidth` artırılmamalıdır.
-- [fetch.cc:1317](../../src/cpu/o3/fetch.cc): tek aralık `inRange` ve FT pop
+- [fetch.cc:1317](../../../src/cpu/o3/fetch.cc): tek aralık `inRange` ve FT pop
   davranışı, aktif block/whole target ayrımını kullanmalıdır. Geriye veya
   aynı adrese taken durumunda yalnızca sayısal aralık kontrolü yetmez.
-- [fetch.cc:372](../../src/cpu/o3/fetch.cc): tek buffer'a kopyalanan yanıt,
+- [fetch.cc:372](../../../src/cpu/o3/fetch.cc): tek buffer'a kopyalanan yanıt,
   doğru block/fragment'e bağlanmalı; eski yanıt yeni hedefi doldurmamalıdır.
 
 FTQ slot birimi artık hedef grubudur. `maxFTPerCycle` grup admission
@@ -192,8 +223,8 @@ eşleşmelidir. Sadece `fetchCacheLine()` fonksiyonunu N kez çağırmak olmaz.
 **Yayınlanmış yol için geç mBTB override:** Henüz FTQ/buffer içinde kalan
 suffix bridge+FTQ+fetch yardımıyla düzeltilir. Fetch edilmiş fakat decode'a
 gönderilmemiş genç DynInst'ler fetchQueue'dan da kaldırılır. Daha ileri
-gitmiş instruction varsa [comm.hh](../../src/cpu/o3/comm.hh) ve mevcut O3
-squash dağıtımına, tipik olarak [commit.cc](../../src/cpu/o3/commit.cc)
+gitmiş instruction varsa [comm.hh](../../../src/cpu/o3/comm.hh) ve mevcut O3
+squash dağıtımına, tipik olarak [commit.cc](../../../src/cpu/o3/commit.cc)
 üzerinden, açık bir override isteği eklenir; ilgili header da güncellenir.
 Normal decode/execute recovery'siyle dinamik yaş/geçerlilik arbitration'ı
 yapılır. Rename/IEW/ROB algoritmalarını değiştirmek yerine mevcut squash

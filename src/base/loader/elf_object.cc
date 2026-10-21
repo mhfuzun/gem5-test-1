@@ -380,6 +380,12 @@ ElfObject::handleLoadableSegment(GElf_Phdr phdr, int seg_num)
         return;
     }
 
+    // Keep track of the complete virtual address range occupied by the
+    // object.  Process::updateBias() uses this range to reserve space for a
+    // relocatable ELF interpreter before normal mmap allocations begin.
+    ldMin = std::min(ldMin, phdr.p_vaddr);
+    ldMax = std::max(ldMax, phdr.p_vaddr + phdr.p_memsz);
+
     image.addSegment({ name, phdr.p_paddr, imageData,
                        phdr.p_offset, phdr.p_filesz });
     Addr uninitialized = phdr.p_memsz - phdr.p_filesz;

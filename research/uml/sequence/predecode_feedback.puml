@@ -1,0 +1,225 @@
+@startuml predecode_feedback
+title Decoded instruction -> dynamic prediction binding -> target consumption
+autonumber
+hide footbox
+skinparam shadowing false
+skinparam maxMessageSize 95
+
+legend left
+  |= Prefix |= Meaning |
+  | [E] | Existing gem5 call, return, or signal |
+  | [N] | Proposed interface or integration hook |
+  | [A] | Algorithm step / private plumbing, not a C++ method |
+  Conditional outcomes are resolved by execution, not by predecode.
+endlegend
+
+participant Fetch
+participant "ISA decoder" as Decoder
+participant "O3 CPU" as CPU
+participant "DynInst / fetchQueue" as Inst
+participant BAC
+participant Gem5BpuBridge as Bridge
+participant IBPU
+participant PredictionLedger as Ledger
+participant BlockFetchEngine as Engine
+participant FTQ
+participant "O3 time buffers" as TB
+
+note over Fetch, FTQ
+  Entry condition: live FTQ target, active BlockCursor, enough bytes for the
+  next instruction, and fetchWidth / fetchQueue capacity. See fetch_blocks_merge.
+  This is Fetch-stage ISA decoding; it occurs before the O3 Decode stage.
+end note
+
+Fetch -> Decoder : [E] decode(this_pc), or fetch macro/ROM microop
+Decoder --> Fetch : [E] StaticInst
+Fetch -> Fetch : [E] buildInst(tid, staticInst, macroop, this_pc, next_pc, true)
+Fetch -> CPU : [E] getAndIncrementInstSeq()
+CPU --> Fetch : [E] InstSeqNum
+Fetch -> Inst : [E] construct DynInst with actual PC / StaticInst
+Fetch -> CPU : [E] addInst(instruction)
+Fetch -> Inst : [E] fetchQueue[tid].push_back(instruction)
+Fetch -> Fetch : [E] ppFetch->notify(); numInst++; set fetchTick
+Fetch -> BAC : [E] updatePC(instruction, next_pc, curFT)
+
+note over Fetch, Bridge
+  In legacy mode, BAC::updatePC calls updatePreDecode only for controls.
+  In IBPU mode, hook every decoded instruction to detect phantom CFIs too.
+  Keep this call site; dispatch inside BAC according to selected mode.
+  Required new plumbing: expose Fetch's active BlockCursor to BAC.
+  The existing updatePC(inst, pc, ft) signature does not carry a cursor.
+end note
+
+BAC -> Bridge : [N] bindAndPredict(inst, activeCursor)
+Bridge -> Bridge : [A] find CFI by dynamic key + blockIndex + actual PC;
+Bridge -> Bridge : [A] build PredecodeFeedback, including matchedCfi if any
+Bridge -> IBPU : [N] onPredecodeFeedback(fb)
+IBPU -> Ledger : [N] bind(fb)
+alt decoded control matches a predicted CFI
+    Ledger -> Ledger : [A] bind instSeq to BranchRef(key, blockIndex, cfiId)
+    Ledger -> Ledger : [A] retain model history / lookup metadata for that query
+    Ledger --> IBPU : [N] PredictionBinding(branch, taken, nextPC, needsRepair)
+else decoded control missing from prediction
+    Ledger -> Ledger : [A] allocate dynamic CFI identity / history binding
+    Ledger -> Ledger : [A] retain real type and length; mark missing prediction
+    Ledger --> IBPU : [N] provisional binding requiring model fallback
+    IBPU -> IBPU : [A] choose fallback prediction and required speculative-history repair
+    note over IBPU, Ledger
+      Missing-CFI policy belongs to the selected model.
+      Existing BAC uses a not-taken placeholder for this common case;
+      its taken-history assumption cannot be imposed on all IBPU models.
+      If new history affects later predictions, recover/recompute that suffix.
+    end note
+else predicted CFI is a normal instruction, or type/length mismatch
+    Ledger -> Ledger : [A] mark stale metadata; identify invalid speculative suffix
+    Ledger --> IBPU : [N] binding with needsRepair = true and corrected fetch choice
+else ordinary non-control instruction with no matching CFI
+    Ledger --> IBPU : [N] no BranchRef; sequential nextPC; taken = false
+end
+IBPU --> Bridge : [N] PredictionBinding
+note over Bridge, Ledger
+  PC, instruction identity/type/length and direct static targets become known.
+  No real conditional direction or indirect target is learned here.
+  CFI.isPrediction = false is NOT proof of an executed branch outcome.
+  Same PC in another block/loop iteration still has a different binding.
+  Macroop/microop handling must preserve full PCState and last-uop boundaries.
+end note
+
+Bridge -> Bridge : [A] combine binding with block limits / next block PC
+Bridge --> BAC : [N] FetchDecision(nextPC, predictedTaken,\nblockDone, targetDone, needsRepair)
+
+alt decision requires metadata / path repair
+    BAC -> Bridge : [A] record exact pending cut and corrected fetch choice
+    Bridge -> Bridge : [A] retain key / block / instruction boundary and restartPC
+    note over Fetch, FTQ
+      Detect and record repair here; do not call onRecovery yet.
+      Fetch will stop affected consumption and signal the existing BAC route.
+      Shared sidecar state preserves the exact cut across fetchToBacDelay.
+      Do not also train this event as an execute misprediction.
+      Corrected nextPC is sequential or statically derived where possible;
+      unresolved conditional / indirect choices remain predictions.
+    end note
+end
+
+opt decoded instruction closes this block, with no repair already pending
+    BAC -> Bridge : [N] finishBlock(activeCursor)
+    Bridge -> Bridge : [A] audit predicted CFI positions not matched during decode
+    alt leftover phantom CFI / incompatible byte boundary
+        Bridge -> Bridge : [A] record exact pending cut / corrected fetch choice
+        note over BAC, Bridge
+          finishBlock returns void in the class contract.
+          This audit records shared repair state before normal consumption;
+          it cannot silently return an unreported new FetchDecision.
+          Use the same delayed repair path as bindAndPredict.
+          Neither detection site calls onRecovery immediately.
+          Final microop must complete before declaring a block finished.
+        end note
+    else block metadata consistent
+        Bridge -> Bridge : [A] close this block; keep target if later blocks remain
+    end
+end
+
+BAC -> BAC : [A] finalize next_pc / predictedTaken from binding or pending correction
+BAC -> Inst : [E] setPredTarg(next_pc)
+BAC -> Inst : [E] setPredTaken(predictedTaken)
+BAC -> BAC : [A] clear curFT only if whole target done or marked unusable by repair
+BAC --> Fetch : [E] return predictedTaken
+Fetch -> Fetch : [E] set(this_pc, next_pc); update macroop / byte offset state
+alt a pending repair supplies an exact cancellation cut
+    Fetch -> Engine : [N] invalidateYounger(cut)
+    Fetch -> Fetch : [A] retain surviving prefix; stop consuming affected target bytes
+    note over Fetch, BAC
+      The boolean updatePC return cannot carry a recovery cut.
+      Share repair state through the BAC/Fetch integration plumbing.
+      Do not advance an invalidated target cursor or resume it before repair.
+    end note
+else current cursor still valid
+    Fetch -> Engine : [N] advance(nextPC, decodedBytes)
+end
+
+alt no pending repair, current block ends and more valid blocks remain
+    Fetch -> Engine : [N] blockDone() / targetDone()
+    Engine --> Fetch : [N] block done, target not done
+    Fetch -> Fetch : [A] continue at next block if bytes and bandwidth allow
+    note over Fetch, Engine
+      Modify legacy predictedBranch loop-stop and flat inRange checks.
+      A taken exit may continue into the next block of the SAME target.
+      Enforce block/taken bandwidth limits; no FTQ pop at this transition.
+      Preserve true PC and discard no surviving instruction bytes.
+    end note
+else whole target consumed without pending repair
+    Fetch -> Fetch : [A] retain head key / ownership state across popHead()
+    Fetch -> FTQ : [E] popHead(tid), now once per whole target
+    FTQ --> Fetch : [E] bool success
+    alt pop succeeded
+        Fetch -> BAC : [A] forward consumed key through BAC's owned bridge
+        BAC -> Bridge : [A] forward consumed key
+        Bridge -> IBPU : [N] onTargetConsumed(key)
+        IBPU -> Ledger : [N] markFetchConsumed(key)
+        note over IBPU, Ledger
+          This releases fetch ownership, not all prediction metadata.
+          Preserve InstSeqNum bindings and history until commit/recovery
+          and all slow-stage users finish. FTQ pop is not training.
+          The class has no named BAC/bridge consumed-forwarding helper yet.
+        end note
+        opt another target is ready and bandwidth permits
+            Fetch -> FTQ : [E] readHead(tid)
+            FTQ --> Fetch : [E] next FetchTargetPtr
+            Fetch -> Engine : [N] begin(nextFT)
+        end
+    else pop failed
+        Fetch -> Fetch : [A] record pending repair; stop affected consumption
+        Fetch -> Engine : [N] invalidateYounger(cut)
+        note right of FTQ
+          Legacy false has two meanings: leftover history prevents removal,
+          but a Locked head is removed and still returns false.
+          If retained: recovery owns that queued payload's cleanup.
+          If already removed: retain its key/metadata through the sidecar;
+          release fetch ownership once, with no second FTQ pop.
+          Do not report this canceled target as normally consumed.
+        end note
+    end
+else repair pending for current target
+    Fetch -> Fetch : [A] stop consuming canceled bytes; retain repair sidecar
+end
+
+opt a pending repair has not already been signaled
+    Fetch -> Fetch : [E] bacResteer(restartPC, tid)
+    Fetch -> TB : [E] write fetchInfo.squash = true; nextPC = restartPC
+    Fetch -> FTQ : [E] invalidate(tid)
+    Fetch -> BAC : [A] forward exact repair sidecar through BAC's bridge plumbing
+    BAC -> Bridge : [A] retain pending cut / restartPC and payload ownership
+    note over Fetch, Bridge
+      Existing FetchComm carries squash and nextPC only.
+      Add a sidecar or small signal extension for the dynamic cut.
+      While pending, block affected admission and fetch consumption;
+      do not erase the surviving instruction's binding or metadata.
+    end note
+end
+
+note over Fetch, Inst
+  buildInst enqueued the DynInst BEFORE BAC::updatePC above.
+  The same object's prediction fields are finalized before publication.
+  The current DynInst and valid older prefix may publish normally.
+  Fetch::tick drains surviving fetchQueue entries toDecode, up to decodeWidth.
+  No direct call to the Decode stage is made here.
+end note
+
+... fetchToBacDelay, if a repair was signaled ...
+ref over Fetch, BAC, Bridge, IBPU
+  backend_recovery.puml: Fetch requests a BAC resteer
+  BAC receives fetchInfo after older Commit/Decode recovery arbitration.
+  forwardFeedback applies onRecovery(FetchRepair, cut, restartPC) exactly once,
+  or an older recovery supersedes and discards this pending request.
+  Only here restore model history and remove the invalid frontend suffix.
+  resolvedOutcome is absent for this predecode repair.
+end ref
+
+note over Fetch, FTQ
+  Existing anchors: src/cpu/o3/fetch.cc buildInst:1005, fetch:1058,
+  buildInst call:1276, BAC::updatePC call:1291, popHead:1339,
+  time-buffer publication:891. src/cpu/o3/bac.cc
+  updatePreDecode:764, updatePC:904; src/cpu/o3/ftq.cc popHead:238.
+  New signatures are from research/uml/class/class_diagram_v2.puml.
+end note
+@enduml

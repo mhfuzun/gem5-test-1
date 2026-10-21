@@ -77,6 +77,34 @@ package "BPU boundary - no O3 / FTQ dependency" {
     }
 }
 
+package "Base Data Types" {
+    class PredictedCFI {
+        +id: CfiId
+        +cfi_type: CFI
+        +isAlwaysTaken: bool
+        +isTaken: bool
+        +target: PCState
+        +length: optional<unsigned>
+        +history: HistoryHandle
+    }
+
+    class CFI {
+        +type: CFIType
+        +offset: int
+        +length: int
+    }
+
+    enum CFIType {
+        Brunch,
+        DirectJump,
+        IndirectJump,
+        Return
+    }
+
+    PredictedCFI -- CFI
+    CFI -right- CFIType
+}
+
 package "Selectable models and their private BTBs" {
     class SingleTakenLineBPU <<new>>
     class TwoTakenBPU <<new>>
@@ -91,6 +119,24 @@ package "Selectable models and their private BTBs" {
     class TwoTakenBTB
     class UBTB
     class MBTB
+
+    class BTBQuery {
+        +addr: Addr
+    }
+
+    class BTBResult {
+        +cfi_list: PredictedCFI[]
+        +commitData: void*
+    }
+
+    class BTBUpdate {
+        +addr: Addr
+        +cfi_result: PredictedCFI
+    }
+
+    IBTB -- BTBQuery
+    IBTB -- BTBResult
+    IBTB -- BTBUpdate
 }
 
 package "O3 integration" {
@@ -187,6 +233,8 @@ IBTB <|.. SingleLineBTB
 IBTB <|.. TwoTakenBTB
 IBTB <|.. UBTB
 IBTB <|.. MBTB
+
+BTBResult *-- PredictedCFI
 
 BAC *-- Gem5BpuBridge
 Gem5BpuBridge --> IBPU : supply / feedback
