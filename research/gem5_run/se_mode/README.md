@@ -14,8 +14,9 @@ manifest kontrollü bir SimPoint akışı sağlar:
 koşularından ağırlıklı CPI ve tahminî IPC üretir.
 
 Birden fazla SPEC benchmark'ı için workload manifesti, Step A ve Step B'yi
-paralel yürüten `run_spec_batch.py` de bulunur. Bundle kullanımı, `--jobs`
-zamanlaması, resume kuralları ve üretilen batch raporu
+paralel yürüten `run_spec_batch.py` de bulunur. Repo içindeki `gem5.fast`/
+`gem5.opt` seçimi, doğrudan train dizini, `--jobs` zamanlaması, resume
+kuralları ve `research-result` altında üretilen batch raporu
 [`BATCH_SPEC_PIPELINE.md`](BATCH_SPEC_PIPELINE.md) içinde açıklanmıştır.
 
 ## Ön koşullar
@@ -39,7 +40,7 @@ komut için ayrı manifest oluşturulur:
 
 ```bash
 python3 research/gem5_run/se_mode/spec_workload.py from-speccmds \
-  --run-dir research/scripts/spec-runs/train/531.deepsjeng_r/run_base_train_mytest.0000 \
+  --run-dir research-out/spec-runs/train/531.deepsjeng_r/run_base_train_mytest.0000 \
   --benchmark 531.deepsjeng_r \
   --output-dir research/gem5_run/se_mode/workloads
 ```

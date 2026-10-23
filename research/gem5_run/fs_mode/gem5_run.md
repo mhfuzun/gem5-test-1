@@ -1,4 +1,10 @@
 
+## derleme
+```
+scons build/RISCV/gem5.fast -j$(nproc)
+scons build/RISCV/gem5.opt -j$(nproc)
+```
+
 ## Checkpoint
 ```
 IMAGE_FILES=$(realpath ../gem5-boot-tests-image-files)

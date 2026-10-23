@@ -52,6 +52,9 @@ from spec_workload import (
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+REPOSITORY_ROOT = SCRIPT_DIR.parents[2]
+DEFAULT_SPEC_RUNS_ROOT = REPOSITORY_ROOT / "research-out" / "spec-runs"
+RESEARCH_RESULT_ROOT = REPOSITORY_ROOT / "research-result"
 PROFILE_SCRIPT = SCRIPT_DIR / "01_profile.py"
 CHECKPOINT_SCRIPT = SCRIPT_DIR / "02_checkpoint.py"
 MAX_JOBS = 12
@@ -83,59 +86,26 @@ def assignment_map(values: Sequence[str], option: str) -> dict[str, str]:
     return parsed
 
 
-def resolve_bundle_gem5(bundle: Path) -> Path:
-    """Resolve gem5.fast from an extracted bundle or bundle-out directory."""
-    resolved = bundle.expanduser().resolve()
-    if resolved.is_file():
-        if resolved.name != "gem5.fast":
-            raise PipelineError(
-                f"--bundle file must be gem5.fast, got: {resolved}"
-            )
-        candidates = [resolved]
-    elif resolved.is_dir():
-        direct = resolved / "bin" / "gem5.fast"
-        candidates = [direct] if direct.is_file() else []
-        if not candidates:
-            candidates = sorted(
-                path
-                for path in resolved.glob("*/bin/gem5.fast")
-                if not path.parts[-3].startswith(".")
-            )
-    else:
-        raise PipelineError(f"bundle path does not exist: {resolved}")
-
-    if not candidates:
-        raise PipelineError(
-            f"no extracted */bin/gem5.fast found under {resolved}"
-        )
-    if len(candidates) > 1:
-        rendered = "\n  ".join(str(path) for path in candidates)
-        raise PipelineError(
-            "multiple gem5.fast bundles found; pass one extracted bundle "
-            f"directory explicitly:\n  {rendered}"
-        )
-    binary = executable(candidates[0], "bundled gem5.fast")
-    invocation = gem5_invocation(binary)
-    if len(invocation) != 2:
-        raise PipelineError(
-            "portable bundle is missing its executable run-gem5 launcher: "
-            f"{binary.parent.parent}"
-        )
-    return binary
+def resolve_gem5_binary(gem5: Path | None, gem5_type: str) -> Path:
+    """Resolve an explicit gem5 path or an in-repository RISC-V build."""
+    if gem5 is not None:
+        return executable(gem5, "gem5 binary")
+    return executable(
+        REPOSITORY_ROOT / "build" / "RISCV" / f"gem5.{gem5_type}",
+        f"in-repository gem5.{gem5_type}",
+    )
 
 
 def load_spec_runs_catalog(
-    spec_runs_root: Path, size: str
+    spec_runs_root: Path, size: str | None = None
 ) -> tuple[Path, dict[str, str]]:
+    """Load either a spec-runs size or a directly selected input directory."""
     root = spec_runs_root.expanduser().resolve()
-    if not root.is_dir():
-        raise PipelineError(f"spec-runs root does not exist: {root}")
-    size_root = root / size
-    if not size_root.is_dir():
-        raise PipelineError(
-            f"spec-runs input size directory does not exist: {size_root}"
-        )
-    manifest_path = size_root / "manifest.tsv"
+    input_root = root / size if size is not None else root
+    if not input_root.is_dir():
+        label = "spec-runs input directory" if size is None else "input size"
+        raise PipelineError(f"{label} does not exist: {input_root}")
+    manifest_path = input_root / "manifest.tsv"
     if not manifest_path.is_file():
         raise PipelineError(
             f"spec-runs manifest does not exist: {manifest_path}"
@@ -163,7 +133,25 @@ def load_spec_runs_catalog(
                 f"duplicate benchmark {benchmark!r} in {manifest_path}"
             )
         catalog[benchmark] = run_dir
-    return size_root, catalog
+    return input_root, catalog
+
+
+def resolve_output_root(output_root: Path | None, input_root: Path) -> Path:
+    """Keep every generated batch artifact below research-result."""
+    result_root = RESEARCH_RESULT_ROOT.resolve()
+    selected = (
+        output_root.expanduser().resolve()
+        if output_root is not None
+        else (result_root / "batch_results" / input_root.name).resolve()
+    )
+    try:
+        selected.relative_to(result_root)
+    except ValueError as error:
+        raise PipelineError(
+            "--output-root must be inside the repository research-result "
+            f"directory ({result_root}), got: {selected}"
+        ) from error
+    return selected
 
 
 def resolve_run_directory(
@@ -572,7 +560,9 @@ def render_report(report: Mapping[str, Any]) -> str:
         f"- Parallel jobs: `{report.get('jobs')}`",
         f"- Completed workloads: `{completed}`",
         f"- Failed workloads: `{failed}`",
+        f"- Input directory: `{report.get('input_directory')}`",
         f"- gem5: `{report.get('gem5', {}).get('path')}`",
+        f"- gem5 selection: `{report.get('gem5_selection')}`",
         "",
         "| Workload | Profile | Checkpoint | Checkpoints | Seconds |",
         "|---|---:|---:|---:|---:|",
@@ -624,16 +614,39 @@ def write_reports(output_root: Path, report: Mapping[str, Any]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    gem5_input = parser.add_mutually_exclusive_group(required=True)
-    gem5_input.add_argument(
-        "--bundle",
+    parser.add_argument(
+        "--gem5-type",
+        choices=("fast", "opt"),
+        default="fast",
+        help=(
+            "use build/RISCV/gem5.TYPE from this repository " "(default: fast)"
+        ),
+    )
+    parser.add_argument(
+        "--gem5",
         type=Path,
-        help="extracted bundle root, bundle-out directory, or gem5.fast",
+        help="explicit gem5 executable; overrides --gem5-type",
     )
-    gem5_input.add_argument(
-        "--gem5", type=Path, help="non-bundled gem5.fast executable"
+    input_group = parser.add_mutually_exclusive_group()
+    input_group.add_argument(
+        "--train-dir",
+        "--input-dir",
+        dest="input_dir",
+        type=Path,
+        help=(
+            "prepared input directory containing manifest.tsv, for example "
+            "research-out/spec-runs/train_reduced"
+        ),
     )
-    parser.add_argument("--spec-runs-root", required=True, type=Path)
+    input_group.add_argument(
+        "--spec-runs-root",
+        type=Path,
+        default=DEFAULT_SPEC_RUNS_ROOT,
+        help=(
+            "spec-runs root used with --size "
+            f"(default: {DEFAULT_SPEC_RUNS_ROOT})"
+        ),
+    )
     parser.add_argument(
         "--size", choices=("test", "train", "ref"), default="train"
     )
@@ -653,7 +666,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sysroot", type=Path)
     parser.add_argument("--simpoint-bin", required=True, type=Path)
     parser.add_argument(
-        "--output-root", type=Path, default=SCRIPT_DIR / "batch_results"
+        "--output-root",
+        type=Path,
+        help=(
+            "result directory below research-result; default is "
+            "research-result/batch_results/<input-name>"
+        ),
     )
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument(
@@ -713,20 +731,21 @@ def run(args: argparse.Namespace) -> int:
                 f"--command-index for {benchmark} is not an integer: {value}"
             ) from error
 
-    gem5 = (
-        resolve_bundle_gem5(args.bundle)
-        if args.bundle
-        else executable(args.gem5, "gem5 binary")
-    )
+    gem5 = resolve_gem5_binary(args.gem5, args.gem5_type)
     args.simpoint_bin = executable(args.simpoint_bin, "SimPoint binary")
     if args.sysroot:
         args.sysroot = args.sysroot.expanduser().resolve()
         if not args.sysroot.is_dir():
             raise PipelineError(f"sysroot does not exist: {args.sysroot}")
-    args.output_root = args.output_root.expanduser().resolve()
-    size_root, spec_runs_catalog = load_spec_runs_catalog(
-        args.spec_runs_root, args.size
-    )
+    if args.input_dir is not None:
+        size_root, spec_runs_catalog = load_spec_runs_catalog(args.input_dir)
+        input_size = None
+    else:
+        size_root, spec_runs_catalog = load_spec_runs_catalog(
+            args.spec_runs_root, args.size
+        )
+        input_size = args.size
+    args.output_root = resolve_output_root(args.output_root, size_root)
 
     jobs = []
     preflight_failures = []
@@ -778,10 +797,19 @@ def run(args: argparse.Namespace) -> int:
         "started_at": datetime.now().astimezone().isoformat(),
         "jobs": args.jobs,
         "benchmarks": args.benchmarks,
-        "spec_runs_root": str(args.spec_runs_root.expanduser().resolve()),
-        "input_size": args.size,
+        "spec_runs_root": (
+            None
+            if args.input_dir is not None
+            else str(args.spec_runs_root.expanduser().resolve())
+        ),
+        "input_directory": str(size_root),
+        "input_size": input_size,
+        "output_root": str(args.output_root),
         "command": shlex.join(sys.argv),
         "gem5": gem5_info,
+        "gem5_selection": (
+            "explicit" if args.gem5 is not None else args.gem5_type
+        ),
         "simpoint_binary": str(args.simpoint_bin),
         "parameters": {
             "interval_instructions": args.interval,

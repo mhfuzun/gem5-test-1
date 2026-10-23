@@ -13,16 +13,17 @@ sys.path.insert(0, str(MODULE_DIR))
 
 from common import (  # noqa: E402
     PipelineError,
-    gem5_invocation,
     load_workload,
     parse_instruction_count,
     parse_key_value,
     parse_simpoint_outputs,
 )
 from run_spec_batch import (  # noqa: E402
+    RESEARCH_RESULT_ROOT,
     load_spec_runs_catalog,
     render_report,
-    resolve_bundle_gem5,
+    resolve_gem5_binary,
+    resolve_output_root,
     resolve_run_directory,
     selected_manifest_paths,
 )
@@ -117,20 +118,13 @@ class WorkloadTests(unittest.TestCase):
 
 
 class BatchPipelineTests(unittest.TestCase):
-    def test_bundle_binary_uses_portable_launcher(self):
+    def test_explicit_gem5_binary_overrides_repository_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "bundle"
-            binary = root / "bin" / "gem5.fast"
-            binary.parent.mkdir(parents=True)
+            binary = Path(temporary) / "custom-gem5"
             binary.write_bytes(b"binary")
             binary.chmod(0o755)
-            launcher = root / "run-gem5"
-            launcher.write_text("#!/bin/sh\n", encoding="utf-8")
-            launcher.chmod(0o755)
-            resolved = resolve_bundle_gem5(root)
-            invocation = gem5_invocation(resolved)
+            resolved = resolve_gem5_binary(binary, "opt")
         self.assertEqual(resolved, binary.resolve())
-        self.assertEqual(invocation, [str(launcher.resolve()), "fast"])
 
     def test_spec_runs_catalog_discovers_train_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -152,6 +146,37 @@ class BatchPipelineTests(unittest.TestCase):
                 {},
             )
         self.assertEqual(resolved, run_dir.resolve())
+
+    def test_direct_train_directory_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            train_dir = Path(temporary) / "train_reduced"
+            train_dir.mkdir()
+            (train_dir / "manifest.tsv").write_text(
+                "benchmark\trun_dir\n"
+                "541.leela_r\trun_base_train_test.0000\n",
+                encoding="utf-8",
+            )
+            input_root, catalog = load_spec_runs_catalog(train_dir)
+        self.assertEqual(input_root, train_dir.resolve())
+        self.assertEqual(
+            catalog,
+            {"541.leela_r": "run_base_train_test.0000"},
+        )
+
+    def test_default_batch_output_is_below_research_result(self):
+        output = resolve_output_root(None, Path("/input/train_reduced"))
+        self.assertEqual(
+            output,
+            (
+                RESEARCH_RESULT_ROOT / "batch_results" / "train_reduced"
+            ).resolve(),
+        )
+
+    def test_batch_output_outside_research_result_is_rejected(self):
+        with self.assertRaises(PipelineError):
+            resolve_output_root(
+                Path("/tmp/outside-research-result"), Path("train")
+            )
 
     def test_manifest_plan_preserves_each_spec_command(self):
         with tempfile.TemporaryDirectory() as temporary:
