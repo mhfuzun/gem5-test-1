@@ -13,6 +13,11 @@ manifest kontrollü bir SimPoint akışı sağlar:
 `gem5_config.py` ortak altyapıdır. `summarize.py` tamamlanmış SimPoint
 koşularından ağırlıklı CPI ve tahminî IPC üretir.
 
+Birden fazla SPEC benchmark'ı için workload manifesti, Step A ve Step B'yi
+paralel yürüten `run_spec_batch.py` de bulunur. Bundle kullanımı, `--jobs`
+zamanlaması, resume kuralları ve üretilen batch raporu
+[`BATCH_SPEC_PIPELINE.md`](BATCH_SPEC_PIPELINE.md) içinde açıklanmıştır.
+
 ## Ön koşullar
 
 - RISC-V destekli `gem5.fast` veya `gem5.opt`.

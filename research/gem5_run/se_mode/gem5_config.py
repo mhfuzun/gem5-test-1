@@ -9,6 +9,7 @@ fully resolved runtime JSON document and launch this file with gem5.
 
 import argparse
 import importlib.util
+import inspect
 import json
 import shutil
 import sys
@@ -97,7 +98,14 @@ def create_board(config, cpu_type, checkpoint=None):
     workdir = Path(config["stage_workdir"]).resolve()
     system = config["system"]
 
-    processor = SimpleProcessor(cpu_type=cpu_type, isa=ISA.RISCV, num_cores=1)
+    processor_arguments = {
+        "cpu_type": cpu_type,
+        "isa": ISA.RISCV,
+        "num_cores": 1,
+    }
+    if "clk_freq" in inspect.signature(SimpleProcessor).parameters:
+        processor_arguments["clk_freq"] = system["clock"]
+    processor = SimpleProcessor(**processor_arguments)
     if cpu_type == CPUTypes.O3:
         cache_config = config["o3"]["cache"]
         cache_hierarchy = private_cache.PrivateL1PrivateL2WalkCacheHierarchy(

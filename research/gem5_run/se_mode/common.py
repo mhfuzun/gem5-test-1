@@ -12,12 +12,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
-from typing import (
-    Any,
+from collections.abc import (
     Iterable,
     Mapping,
     Sequence,
+)
+from pathlib import Path
+from typing import (
+    Any,
 )
 
 SCHEMA_VERSION = 1
@@ -401,7 +403,7 @@ def gem5_command(
 ) -> list[str]:
     config_script = Path(__file__).with_name("gem5_config.py").resolve()
     return [
-        str(gem5_binary),
+        *gem5_invocation(gem5_binary),
         "-d",
         str(output_dir.resolve()),
         str(config_script),
@@ -409,6 +411,25 @@ def gem5_command(
         "--config",
         str(runtime_config.resolve()),
     ]
+
+
+def gem5_invocation(gem5_binary: Path) -> list[str]:
+    """Return the command prefix for a local or portable-bundle gem5."""
+    binary = gem5_binary.expanduser().resolve()
+    flavor = binary.name.removeprefix("gem5.")
+    bundle_root = binary.parent.parent
+    launcher = bundle_root / "run-gem5"
+    if (
+        binary.parent.name == "bin"
+        and flavor in {"fast", "opt"}
+        and launcher.is_file()
+    ):
+        if not os.access(launcher, os.X_OK):
+            raise PipelineError(
+                f"gem5 bundle launcher is not executable: {launcher}"
+            )
+        return [str(launcher), flavor]
+    return [str(binary)]
 
 
 def git_revision(repository: Path) -> str | None:
@@ -432,10 +453,28 @@ def tool_record(path: Path) -> dict[str, Any]:
 
 def gem5_record(path: Path) -> dict[str, Any]:
     record = tool_record(path)
-    repository = Path(__file__).resolve().parents[3]
-    record["repository_commit"] = git_revision(repository)
+    invocation = gem5_invocation(path)
+    if len(invocation) == 2:
+        bundle_root = Path(invocation[0]).parent
+        build_info = bundle_root / "metadata" / "BUILD-INFO.txt"
+        record["bundle_root"] = str(bundle_root)
+        record["launcher"] = invocation
+        if build_info.is_file():
+            metadata = {}
+            for line in build_info.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
+                if "=" in line:
+                    key, value = line.split("=", 1)
+                    metadata[key] = value
+            record["bundle_format"] = metadata.get("bundle_format")
+            record["bundle_name"] = metadata.get("bundle_name")
+            record["repository_commit"] = metadata.get("source_revision")
+    else:
+        repository = Path(__file__).resolve().parents[3]
+        record["repository_commit"] = git_revision(repository)
     result = subprocess.run(
-        [str(path.resolve()), "--build-info"],
+        [*invocation, "--build-info"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,

@@ -13,10 +13,18 @@ sys.path.insert(0, str(MODULE_DIR))
 
 from common import (  # noqa: E402
     PipelineError,
+    gem5_invocation,
     load_workload,
     parse_instruction_count,
     parse_key_value,
     parse_simpoint_outputs,
+)
+from run_spec_batch import (  # noqa: E402
+    load_spec_runs_catalog,
+    render_report,
+    resolve_bundle_gem5,
+    resolve_run_directory,
+    selected_manifest_paths,
 )
 from spec_workload import parse_spec_command  # noqa: E402
 
@@ -106,6 +114,83 @@ class WorkloadTests(unittest.TestCase):
             binary.write_bytes(b"version two")
             second = load_workload(manifest_path)["workload_fingerprint"]
         self.assertNotEqual(first, second)
+
+
+class BatchPipelineTests(unittest.TestCase):
+    def test_bundle_binary_uses_portable_launcher(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "bundle"
+            binary = root / "bin" / "gem5.fast"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"binary")
+            binary.chmod(0o755)
+            launcher = root / "run-gem5"
+            launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+            launcher.chmod(0o755)
+            resolved = resolve_bundle_gem5(root)
+            invocation = gem5_invocation(resolved)
+        self.assertEqual(resolved, binary.resolve())
+        self.assertEqual(invocation, [str(launcher.resolve()), "fast"])
+
+    def test_spec_runs_catalog_discovers_train_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = (
+                root / "train" / "531.deepsjeng_r" / "run_base_train_test.0000"
+            )
+            run_dir.mkdir(parents=True)
+            (root / "train" / "manifest.tsv").write_text(
+                "benchmark\trun_dir\n"
+                "531.deepsjeng_r\trun_base_train_test.0000\n",
+                encoding="utf-8",
+            )
+            size_root, catalog = load_spec_runs_catalog(root, "train")
+            resolved = resolve_run_directory(
+                "531.deepsjeng_r",
+                size_root,
+                catalog,
+                {},
+            )
+        self.assertEqual(resolved, run_dir.resolve())
+
+    def test_manifest_plan_preserves_each_spec_command(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run_dir = root / "run_base_train_test.0000"
+            run_dir.mkdir()
+            binary = run_dir / "cpugcc_r_base.test"
+            binary.write_bytes(b"ELF")
+            (run_dir / "speccmds.cmd").write_text(
+                "-o one.out -e one.err ./cpugcc_r_base.test one.c\n"
+                "-o two.out -e two.err ./cpugcc_r_base.test two.c\n",
+                encoding="utf-8",
+            )
+            paths = selected_manifest_paths(
+                "502.gcc_r", run_dir, root / "manifests", None
+            )
+        self.assertEqual(len(paths), 2)
+        self.assertEqual(paths[0].name, "502.gcc_r.cmd000.cpugcc_r.json")
+        self.assertEqual(paths[1].name, "502.gcc_r.cmd001.cpugcc_r.json")
+
+    def test_markdown_report_contains_failures(self):
+        report = {
+            "status": "failed",
+            "jobs": 4,
+            "gem5": {"path": "/bundle/bin/gem5.fast"},
+            "workloads": [
+                {
+                    "workload_id": "test.cmd000",
+                    "status": "failed",
+                    "error": "example failure",
+                    "profile": {"status": "failed"},
+                    "checkpoint": {"status": "pending"},
+                    "wall_seconds": 1.0,
+                }
+            ],
+        }
+        rendered = render_report(report)
+        self.assertIn("example failure", rendered)
+        self.assertIn("test.cmd000", rendered)
 
 
 if __name__ == "__main__":
