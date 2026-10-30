@@ -105,12 +105,9 @@ metodolojik hata gerekir. Eşiği sonuçları görmeden belirle ve raporla.
 
 ## 5. Mevcut scriptlerle çalıştırma
 
-`run_spec_batch.py` workload + Step A + Step B üretir. Step C için
-`batch_o3_run.py` bütün seçili testlerin checkpoint'lerini ortak `--jobs`
-kuyruğunda çalıştırır; `03_run_o3.py` bir checkpoint ve bir konfigürasyon
-çalıştırır. Yeni scheduler ve tam O3 referans betiğinin kullanımı
-[`O3_BATCH_PIPELINE.md`](O3_BATCH_PIPELINE.md) içindedir. Deney işi şu
-çarpımdır:
+`run_spec_batch.py` workload + Step A + Step B üretir. Step C için henüz
+ayrı bir toplu O3 scheduler yoktur; `03_run_o3.py` bir checkpoint ve bir
+konfigürasyon çalıştırır. Deney işi şu çarpımdır:
 
 ```text
 workload x SimPoint x O3 konfigürasyonu x warmup seti
@@ -318,10 +315,9 @@ kontrolünde ayrıca ele alınmalıdır:
   kullanılan bloğun measurement bloğu olduğunu ve `simInsts` değerinin
   runtime'daki measurement delta ile uyumunu doğrula. Bu parser bütün
   özel frontend istatistikleri için genel bir doğrulayıcı değildir.
-- Step A/B batch'i Step C'yi otomatik başlatmaz. `batch_o3_run.py` ayrı
-  çağrılır; bağımsız hata yalıtımı ve yalnızca tam sonuç setinde toplama
-  uygular. Her çağrı yeni session açar, eski sonuçların üzerine yazmaz;
-  otomatik resume yapmaz. `run_o3_full.py` tam O3 referansı üretir.
+- Batch, Step C'yi otomatik başlatmaz. Çok sayıda deney için eklenecek O3
+  scheduler; bağımsız hata yalıtımı, resume ve yalnızca tam sonuç setinde
+  toplama sözleşmesini korumalıdır.
 
 ## 11. Sadeleştirilmiş train ile hangi iddia yapılabilir?
 
