@@ -380,9 +380,37 @@ def run_o3(config):
     return 0 if status["complete"] else 2
 
 
+def run_o3_full(config):
+    """Run O3 from program entry to successful SE process termination."""
+    board, processor = create_board(config, CPUTypes.O3)
+    simulator = Simulator(board=board)
+    if config.get("max_insts"):
+        simulator.schedule_max_insts(config["max_insts"])
+    simulator.run()
+    cause = simulator.get_last_exit_event_cause()
+    code = simulator.get_last_exit_event_code()
+    complete = cause == "exiting with last active thread context" and code == 0
+    m5_stats.dump()
+    write_status(
+        config,
+        {
+            "mode": "o3_full",
+            "complete": complete,
+            "program_completed": complete,
+            "exit_cause": cause,
+            "exit_code": code,
+            "committed_instructions": processor.get_total_instructions(),
+            "tick": simulator.get_current_tick(),
+        },
+    )
+    return 0 if complete else 2
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("profile", "checkpoint", "o3"))
+    parser.add_argument(
+        "mode", choices=("profile", "checkpoint", "o3", "o3_full")
+    )
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
     config = read_config(args.config)
@@ -390,6 +418,8 @@ def main():
         return run_profile(config)
     if args.mode == "checkpoint":
         return run_checkpoints(config)
+    if args.mode == "o3_full":
+        return run_o3_full(config)
     return run_o3(config)
 
 

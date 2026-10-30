@@ -10,13 +10,17 @@ import sys
 import time
 from pathlib import Path
 
+from checkpoint_restore import (
+    RESTORE_POLICY,
+    prepare_restore_checkpoint,
+    rewrite_vma_paths,
+)
 from common import (
     PipelineError,
     canonical_hash,
     executable,
     gem5_command,
     gem5_record,
-    load_workload,
     mark_manifest_failed,
     parse_instruction_count,
     parse_key_value,
@@ -25,6 +29,7 @@ from common import (
     read_json,
     run_logged,
     sha256_file,
+    workload_identity,
     write_json,
 )
 
@@ -98,21 +103,51 @@ def validate_checkpoint(path: Path) -> dict:
     return checkpoint
 
 
+def checkpoint_workload(profile: dict, checkpoint: dict) -> dict:
+    """Validate the saved command without depending on the original export."""
+    if profile.get("profile_id") != checkpoint["profile_id"]:
+        raise PipelineError("checkpoint and profile IDs do not match")
+
+    # Restore uses the saved filesystem, which may contain generated files.
+    # Requiring the original SPEC export here makes archived checkpoints
+    # unusable and hashes unrelated source files on every parallel restore.
+    workload = dict(profile["workload"])
+    identity = workload_identity(workload)
+    identity["source_tree_sha256"] = workload["source_tree_sha256"]
+    if (
+        workload["workload_fingerprint"] != checkpoint["workload_fingerprint"]
+        or canonical_hash(identity) != checkpoint["workload_fingerprint"]
+    ):
+        raise PipelineError(
+            "saved workload and checkpoint fingerprints do not match"
+        )
+    binary = Path(workload["binary"])
+    if not binary.is_absolute():
+        binary = Path(checkpoint["filesystem_snapshot"]) / binary
+    if not binary.is_file():
+        raise PipelineError(f"saved workload binary is missing: {binary}")
+    external = [item["host"] for item in workload.get("path_redirects", [])]
+    if workload.get("interpreter_root"):
+        external.append(workload["interpreter_root"])
+    for path in external:
+        if not Path(path).exists():
+            raise PipelineError(
+                f"saved workload host resource missing: {path}"
+            )
+    # Validate against the saved filesystem before creating a run or
+    # starting gem5; batch --dry-run exercises this validation too.
+    rewrite_vma_paths(
+        checkpoint, workload, Path(checkpoint["filesystem_snapshot"])
+    )
+    return workload
+
+
 def run(args: argparse.Namespace) -> Path:
     checkpoint_manifest_path = args.checkpoint_manifest.expanduser().resolve()
     checkpoint = validate_checkpoint(checkpoint_manifest_path)
     profile_path = Path(checkpoint["profile_manifest"])
     profile = read_json(profile_path)
-    if profile.get("profile_id") != checkpoint["profile_id"]:
-        raise PipelineError("checkpoint and profile IDs do not match")
-
-    source_manifest = Path(profile["workload"]["manifest_path"])
-    workload = load_workload(source_manifest)
-    if workload["workload_fingerprint"] != checkpoint["workload_fingerprint"]:
-        raise PipelineError(
-            "workload manifest or source run directory changed after "
-            "checkpointing"
-        )
+    workload = checkpoint_workload(profile, checkpoint)
 
     gem5 = executable(args.gem5, "gem5 binary")
     gem5_info = gem5_record(gem5)
@@ -164,6 +199,7 @@ def run(args: argparse.Namespace) -> Path:
         "measurement_instructions": measurement,
         "o3": o3_config,
         "gem5": gem5_info,
+        "checkpoint_restore_policy": RESTORE_POLICY,
     }
     configuration_id = canonical_hash(run_identity)[:24]
     default_output = (
@@ -180,6 +216,10 @@ def run(args: argparse.Namespace) -> Path:
         workdir,
         source_override=Path(checkpoint["filesystem_snapshot"]),
     )
+    restore_record = prepare_restore_checkpoint(
+        checkpoint, workload, workdir, output_dir / "restore_checkpoint"
+    )
+    write_json(output_dir / "checkpoint_restore.json", restore_record)
 
     runtime_status = output_dir / "runtime_status.json"
     runtime_config = {
@@ -192,7 +232,7 @@ def run(args: argparse.Namespace) -> Path:
             "memory_size": checkpoint["system"]["memory_size"],
         },
         "o3": o3_config,
-        "checkpoint_path": checkpoint["checkpoint_path"],
+        "checkpoint_path": restore_record["restore_checkpoint"],
         "warmup_instructions": checkpoint["actual_warmup_instructions"],
         "measurement_instructions": measurement,
     }
@@ -207,6 +247,7 @@ def run(args: argparse.Namespace) -> Path:
         "checkpoint_id": checkpoint["checkpoint_id"],
         "checkpoint_manifest": str(checkpoint_manifest_path),
         "checkpoint_contract_hash": checkpoint["checkpoint_contract_hash"],
+        "checkpoint_restore": restore_record,
         "profile_id": checkpoint["profile_id"],
         "workload_fingerprint": workload["workload_fingerprint"],
         "interval_index": checkpoint["interval_index"],
@@ -225,6 +266,7 @@ def run(args: argparse.Namespace) -> Path:
             "runtime_config": str(runtime_config_path),
             "stats": str(output_dir / "stats.txt"),
             "gem5_config": str(output_dir / "config.json"),
+            "restore_checkpoint": restore_record["restore_checkpoint"],
         },
     }
     run_manifest_path = output_dir / "run_manifest.json"

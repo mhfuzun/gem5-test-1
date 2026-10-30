@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  $refresh
+  <title>gem5 · Koşu Günlükleri</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #10151c; color: #e7edf5; }
+    main { max-width: 1100px; margin: auto; padding: 24px 16px; }
+    header { border-bottom: 1px solid #334155; margin-bottom: 24px; }
+    h1 { font-size: 1.6rem; margin: 12px 0; }
+    p, #status { color: #b1c2d3; line-height: 1.5; }
+    .tag { color: #8ce0be; font-size: .8rem; letter-spacing: .12em; }
+    .controls { display: flex; flex-wrap: wrap; gap: 16px;
+                align-items: center; margin: 16px 0; }
+    select, button { background: #1d2a38; border: 1px solid #65798d;
+      color: #fff; padding: 12px; border-radius: 8px; font-size: 1rem; }
+    select { flex: 1; min-width: 0; width: 100%; }
+    label { display: flex; gap: 8px; align-items: center; }
+    input { width: 20px; height: 20px; accent-color: #8ce0be; }
+    pre { margin: 16px 0; padding: 18px; background: #090d12;
+      border: 1px solid #334155; border-radius: 12px; min-height: 45vh;
+      max-height: 70vh; overflow: auto; white-space: pre-wrap;
+      overflow-wrap: anywhere; font: 13px/1.65 ui-monospace, monospace; }
+    footer { color: #93a6b8; font-size: .85rem; }
+    :focus-visible { outline: 3px solid #8ce0be; outline-offset: 3px; }
+  </style>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <span class="tag">GEM5 / PUBLIC MONITOR</span>
+      <h1>Koşu günlükleri</h1>
+      <p>Yayımlanmak üzere seçilmiş dosyalar. Salt okunur canlı görünüm.</p>
+    </header>
+    <form id="controls" action="/" method="get">
+      <label for="logs">Görüntülenecek dosya</label>
+      <div class="controls"><select id="logs" name="id">$options</select></div>
+      <div class="controls">
+        <button type="submit">Görüntüle / Yenile</button>
+        <label><input id="auto" name="auto" value="1" type="checkbox"
+          $auto_checked>10 sn'de yenile</label>
+        <label><input id="follow" name="follow" value="1" type="checkbox"
+          $follow_checked>Son satırı izle</label>
+      </div>
+    </form>
+    <div id="status" role="status" aria-live="polite">$status</div>
+    <p><a id="direct-log" href="$raw_url" target="_blank"
+      rel="noopener noreferrer" style="color: #8ce0be">Ham yanıtı aç</a>
+      · Arayüz okuyamazsa API yanıtını ayrı sekmede kontrol et.</p>
+    <pre id="content" tabindex="0" aria-label="Log içeriği">$body</pre>
+    <footer>Bu görünüm yalnızca logun son kısmını gösterir.
+      Tam dosyalar sunucuda saklanır. Log sessizse koşu yine devam ediyor
+      olabilir; bu sayfa bir süreç canlılık kontrolü değildir.</footer>
+  </main>
+</body>
+</html>

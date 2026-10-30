@@ -1,0 +1,18 @@
+{
+    "arguments": [],
+    "binary": "hello",
+    "environment": {
+        "LC_ALL": "C"
+    },
+    "guest_binary": "/work/hello",
+    "guest_working_directory": "/work",
+    "interpreter_root": null,
+    "path_redirects": [],
+    "schema_version": 1,
+    "source_run_directory":
+        "../../../../tests/test-progs/hello/bin/riscv/linux",
+    "stderr": null,
+    "stdin": null,
+    "stdout": null,
+    "workload_id": "riscv-hello-smoke"
+}

@@ -130,6 +130,27 @@ def _require_string(data: Mapping[str, Any], key: str) -> str:
     return value
 
 
+def workload_identity(data: Mapping[str, Any]) -> dict[str, Any]:
+    """Fields covered by a normalized workload's fingerprint."""
+    return {
+        key: data[key]
+        for key in (
+            "schema_version",
+            "workload_id",
+            "binary",
+            "guest_binary",
+            "arguments",
+            "stdin",
+            "stdout",
+            "stderr",
+            "environment",
+            "guest_working_directory",
+            "path_redirects",
+            "interpreter_root",
+        )
+    }
+
+
 def load_workload(path: Path, *, hash_source: bool = True) -> dict[str, Any]:
     """Load, normalize, and validate a workload manifest."""
     data = read_json(path.resolve())
@@ -268,23 +289,7 @@ def load_workload(path: Path, *, hash_source: bool = True) -> dict[str, Any]:
     ].startswith("/"):
         raise PipelineError("guest_binary must be an absolute path")
 
-    identity = {
-        key: normalized[key]
-        for key in (
-            "schema_version",
-            "workload_id",
-            "binary",
-            "guest_binary",
-            "arguments",
-            "stdin",
-            "stdout",
-            "stderr",
-            "environment",
-            "guest_working_directory",
-            "path_redirects",
-            "interpreter_root",
-        )
-    }
+    identity = workload_identity(normalized)
     identity["source_tree_sha256"] = (
         directory_digest(source_dir) if hash_source else None
     )
@@ -471,8 +476,7 @@ def gem5_record(path: Path) -> dict[str, Any]:
             record["bundle_name"] = metadata.get("bundle_name")
             record["repository_commit"] = metadata.get("source_revision")
     else:
-        repository = Path(__file__).resolve().parents[3]
-        record["repository_commit"] = git_revision(repository)
+        record["repository_commit"] = git_revision(path.resolve().parent)
     result = subprocess.run(
         [*invocation, "--build-info"],
         text=True,

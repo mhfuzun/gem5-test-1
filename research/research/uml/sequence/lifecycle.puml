@@ -1,0 +1,214 @@
+@startuml lifecycle
+title Frontend lifecycle - reset, scheduled wakeup, drain and takeover
+autonumber
+hide footbox
+skinparam shadowing false
+skinparam maxMessageSize 95
+
+legend left
+  [E] Existing gem5 call / signal
+  [N] New proposed integration
+  [A] Illustrative local algorithm
+endlegend
+
+actor "Simulation / drain manager" as Sim
+participant "CPU / event queue" as CPU
+participant BAC
+participant Gem5BpuBridge as Bridge
+participant IBPU
+participant FTQ
+participant Fetch
+participant BlockFetchEngine as Engine
+participant "Decode / Rename / IEW" as Pipe
+participant Commit
+
+== Startup and per-thread reset ==
+Sim -> CPU: [E] startup()
+CPU -> CPU: [E] BaseCPU::startup()
+CPU -> BAC: [E] startupStage()
+BAC -> BAC: [E] resetStage()
+loop each configured tid
+    BAC -> BAC: [E] clearStates(tid): bacPC = cpu->pcState(tid)
+    BAC -> FTQ: [E] resetState(tid)
+    BAC -> Bridge: [N] clear frontend state for tid
+    Bridge -> IBPU: [N] reset(tid, startPC)
+    IBPU -> IBPU: [A] Cancel transient predictions, histories and timers;
+    note right of IBPU
+      Define reset as a speculative-context reset.
+      Initial table allocation is model construction policy;
+      clearing trained tables requires a separate explicit policy.
+      This avoids losing training on ordinary stage reset.
+    end note
+end
+BAC -> BAC: [E] switchToActive()
+CPU -> Fetch: [E] startupStage() -> resetStage()
+Fetch -> Engine: [N] clear cursor, segments and request bookkeeping
+CPU -> Pipe: [E] startupStage(): Decode, IEW, Rename (this order)
+CPU -> Commit: [E] startupStage()
+note over CPU,Fetch
+  Sources: cpu.cc:CPU::startup / CPU::removeThread;
+  bac.cc:BAC::startupStage / resetStage / clearStates;
+  fetch.cc:Fetch::startupStage / resetStage / clearStates.
+  CPU::removeThread also calls BAC::clearStates(tid), then Fetch::clearStates(tid):
+  use the same new cleanup hooks after normal pipeline quiescence.
+end note
+
+== Tick ordering and a model deadline while BAC cannot publish ==
+CPU -> CPU: [E] tickEvent -> CPU::tick()
+CPU -> BAC: [E] tick()
+BAC -> BAC: [E] checkSignalsAndUpdate(tid)
+BAC -> Bridge: [N] service(now = cpu->curCycle(), credits)
+Bridge -> IBPU: [N] tick(now, credits)
+note over BAC,IBPU
+  Service pending model work even when BAC is FTQFull / FTQLocked.
+  Admission and new query issue obey their separate credits.
+  Stopped / invalid contexts cannot issue, but timers and recovery must progress.
+  Feedback and recovery precede new issue (see tick_path.puml).
+end note
+Bridge -> IBPU: [N] nextWakeup()
+IBPU --> Bridge: [N] optional absolute deadline in CPU-domain Cycles
+Bridge -> CPU: [N] arm / update frontendWakeEvent(deadline)
+CPU -> CPU: [N] delta = max(0, deadline - curCycle());
+CPU -> CPU: [N] fireTick = clockEdge(Cycles(delta)); schedule earliest wake
+note right of CPU
+  New CPU-owned event, not schedule(event, raw Cycles).
+  Order its callback before CPU_Tick_Pri at the deadline edge.
+  Re-arm on an earlier deadline and on clock-domain changes.
+  Ensure at most one CPU tick per edge; an already serviced
+  deadline must not recursively schedule the same cycle.
+  nextWakeup excludes a ready response waiting only for credits;
+  FTQ credit release / external callbacks wake blocked work.
+end note
+CPU -> Fetch: [E] tick()
+CPU -> Pipe: [E] tick(): Decode -> Rename -> IEW
+CPU -> Commit: [E] tick()
+CPU -> CPU: [E] advance time buffers, activity accounting, tryDrain()
+alt pipeline remains active
+    CPU -> CPU: [E] schedule(tickEvent, clockEdge(Cycles(1)))
+else activity becomes idle but a model deadline is pending
+    CPU -> CPU: [N] retain frontendWakeEvent despite CPU tick idling
+    ... simulation event time reaches fireTick ...
+    CPU -> CPU: [N] frontendWakeEvent callback, if context is runnable
+    CPU -> CPU: [N] wakeCPU accounting + ensure earliest CPU tick is scheduled
+    CPU -> BAC: [E] resumed CPU::tick() starts with BAC::tick()
+    BAC -> Bridge: [N] service(now, credits), process due work once
+end
+note over CPU,IBPU
+  Sources: cpu.cc:CPU::tick / CPU::wakeCPU;
+  cpu.hh:CPU::scheduleTickEvent; bac.cc:BAC::tick.
+  Existing wakeCPU can return if activityRec.active(); the new scheduling helper
+  must still guarantee a tick when no tickEvent is scheduled.
+  Recompute / cancel the model wake on reset, recovery, drain and switchOut.
+  Suspended threads do not resume architectural execution solely for a prediction.
+end note
+
+== Drain: let Commit reach a safe point before stopping its thread ==
+Sim -> CPU: [E] drain()
+CPU -> Commit: [E] drain(): drainPending = true
+CPU -> CPU: [E] isCpuDrained(); otherwise wakeCPU() and record activity
+note over CPU,IBPU
+  Do not globally stop prediction here: Commit may need additional instructions
+  to reach a safe architectural boundary. Already idle threads need no new issue.
+  beginDrain() has no tid argument: invoke it once every participating thread
+  has stopped; apply per-thread stopping / cleanup as each safe point arrives.
+end note
+loop normal CPU ticks until each participating thread reaches a safe point
+    CPU -> BAC: [E] tick()
+    BAC -> Bridge: [N] service(now, credits for still-running threads)
+    CPU -> Fetch: [E] tick()
+    CPU -> Pipe: [E] tick(): Decode -> Rename -> IEW
+    CPU -> Commit: [E] tick() -> commitInsts()
+    Commit -> Commit: [E] safe boundary: squashAfter(tid, head_inst)
+    Commit -> CPU: [E] commitDrained(tid)
+    CPU -> BAC: [E] drainStall(tid)
+    BAC -> Bridge: [N] mark this thread stopping; reject new issue / admission
+    CPU -> Fetch: [E] drainStall(tid)
+end
+note over BAC,Commit
+  Sources: commit.cc:Commit::commitInsts (drainPending safe-point check);
+  cpu.cc:CPU::commitDrained; bac.cc:BAC::drainStall;
+  fetch.cc:Fetch::drainStall. Commit runs after BAC / Fetch in the same tick.
+  Normal squash feedback is still processed before the BAC drain-stall branch.
+end note
+CPU -> BAC: [E] later tick(): checkSignalsAndUpdate(tid)
+BAC -> Bridge: [N] retire prior commit feedback; discard uncommitted predictions for tid
+Bridge -> IBPU: [N] onRecovery(drain cut, restartPC) as needed, exactly once
+BAC -> FTQ: [E] squash(tid)
+BAC -> BAC: [E] bacStatus[tid] = Idle
+note over BAC,IBPU
+  Existing drain branch calls squashBpuHistories(tid) then FTQ::squash(tid).
+  With bpuModel selected, bridge / IBPU own the equivalent history cleanup;
+  do not call legacy BPredUnit history functions on custom payloads.
+end note
+opt all threads safe / idle, drain not yet sent to model
+    BAC -> Bridge: [N] initiate model drain
+    Bridge -> IBPU: [N] beginDrain()
+    IBPU -> IBPU: [A] stop issue; cancel speculative work / control events;
+    IBPU -> IBPU: [A] release metadata after feedback users are finished
+end
+CPU -> Fetch: [E] tick(): consume squash / drain stall
+Fetch -> Engine: [N] discard speculative segments; mark request tags canceled
+note over Fetch,Engine
+  Preserve existing ITLB / I-cache response and retry ownership rules.
+  Discarding a byte buffer does not cancel an accepted memory request.
+  Drain must also account for custom outstanding tags, callbacks and fault events;
+  clear them on completion or explicit ownership transfer, never by forgetting them.
+end note
+loop until all retained callbacks / metadata have been resolved
+    CPU -> CPU: [E] tryDrain() -> isCpuDrained()
+    CPU -> BAC: [E] isDrained()
+    BAC -> IBPU: [N] isDrained() via bridge
+    IBPU --> BAC: [N] no responses, overrides, pipeline work or live histories
+    BAC --> CPU: [N] existing FTQ empty / BAC idle AND model / bridge drained
+    CPU -> Fetch: [E] isDrained()
+    Fetch -> Engine: [N] check custom buffers / callbacks / outstanding ownership
+    Fetch --> CPU: [N] existing fetch predicate AND custom assembly drained
+    CPU -> Pipe: [E] isDrained() for each stage
+    CPU -> Commit: [E] isDrained()
+end
+CPU -> CPU: [N] cancel remaining frontendWakeEvent
+CPU -> CPU: [E] deschedule tickEvent; signalDrainDone()
+note over CPU,Fetch
+  Sources: cpu.cc:CPU::drain / tryDrain / isCpuDrained;
+  bac.cc:BAC::isDrained / drainSanityCheck;
+  fetch.cc:Fetch::isDrained / drainSanityCheck / doSquash.
+  Existing Fetch::isDrained checks fetchQueue / status / finishTranslationEvent;
+  it is not a check of the proposed BlockFetchEngine request map.
+  Already-drained CPU::drain returns Drained directly rather than signalDrainDone().
+end note
+
+== Resume or CPU takeover ==
+alt same CPU resumes after drain
+    Sim -> CPU: [E] drainResume()
+    CPU -> BAC: [E] drainResume(): clear drain stalls
+    BAC -> Bridge: [N] resume custom frontend
+    Bridge -> IBPU: [N] resume()
+    note right of IBPU
+      Resume at the restart PC established by final drain recovery.
+      Re-enable issue; keep trained tables.
+      Do not invoke reset twice through both BAC and Fetch.
+    end note
+    CPU -> Fetch: [E] drainResume()
+    CPU -> Commit: [E] drainResume()
+    CPU -> CPU: [E] activateThread() for active contexts; schedule tick at nextCycle()
+else drained CPU is switched out and a new CPU takes over
+    Sim -> CPU: [E] switchOut(); later newCPU.takeOverFrom(oldCPU)
+    CPU -> CPU: [N] ensure old frontendWakeEvent is canceled
+    CPU -> CPU: [E] BaseCPU::takeOverFrom(oldCPU)
+    CPU -> BAC: [E] takeOverFrom() -> resetStage() -> clearStates(tid)
+    BAC -> Bridge: [N] same reset hook as startup
+    Bridge -> IBPU: [N] reset(tid, cpu->pcState(tid)) on destination model
+    CPU -> Fetch: [E] takeOverFrom() -> resetStage()
+    Fetch -> Engine: [N] clear destination assembly state
+    CPU -> Pipe: [E] takeOverFrom() for each stage
+    CPU -> Commit: [E] takeOverFrom()
+    CPU -> CPU: [E] leave Idle; later activation / drainResume starts execution
+    note over CPU,IBPU
+      Sources: cpu.cc:CPU::switchOut / takeOverFrom / drainResume;
+      bac.hh:BAC::takeOverFrom; fetch.cc:Fetch::takeOverFrom.
+      Model selection is construction-time Python configuration.
+      Neither takeover nor reset automatically transfers trained predictor state.
+      Checkpoint serialization or cross-model state migration needs its own contract.
+    end note
+end
+@enduml

@@ -1,0 +1,117 @@
+@startuml ftq_request
+title Ready prediction -> FTQ admission -> fetch consumption
+hide footbox
+autonumber
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 95
+
+legend left
+  [E] Existing gem5 call or signal
+  [N] New IBPU / bridge / helper connection
+  [A] Model algorithm; illustrative private operation
+endlegend
+
+participant "o3::BAC" as BAC
+participant Gem5BpuBridge as Bridge
+participant IBPU as BPU
+participant ResponseQueue as Q
+participant "o3::CPU" as CPU
+participant "o3::FTQ" as FTQ
+participant "FTQ probes / optional FDP" as Probes
+participant "o3::Fetch" as Fetch
+
+note over BAC, FTQ
+  Sources: bac.cc BAC::generateFetchTargets() (585),
+  BAC::newFetchTarget() (554); ftq.cc insert() (186), popHead() (238).
+  New mode substitutes bridge admission for legacy target generation.
+end note
+
+BAC -> Bridge : [N] service(now, credits)
+ref over Bridge, BPU
+  First tick IBPU and handle due control events (tick_path.puml).
+  This diagram expands only the subsequent data-admission phase.
+end ref
+loop while insertion budget remains and recovery permits admission
+    Bridge -> FTQ : [N] reuse isReady(tid), isLocked(tid), numFreeEntries(tid)
+    FTQ --> Bridge : [E] validity, lock state and free physical entries
+    alt invalid/locked/full, draining, or model has no hardware credits
+        Bridge -> Bridge : [A] stop admission; leave pending result in IBPU
+        note over BPU, FTQ
+          isReady() alone is insufficient: Locked is not Invalid.
+          No publication means no acceptFetchTarget() call.
+          Do not shift readyCycle for a result that is already ready.
+        end note
+    else target may be admitted
+        Bridge -> BPU : [N] canSupply(now)
+        BPU -> Q : [N] peekReady(now)
+        Q --> BPU : [N] valid head with readyCycle <= now, or none
+        BPU --> Bridge : [N] ready?
+        alt no ready target
+            Bridge -> Bridge : [A] stop this admission loop
+        else ready target exists
+            Bridge -> BPU : [N] peekFetchTarget()
+            BPU --> Bridge : [N] stable BpuFetchTargetPtr + dynamic key
+            Bridge -> Bridge : [N] makeFT(payload)
+            Bridge -> CPU : [N] reuse getAndIncrementFTSeq()
+            CPU --> Bridge : [E] new FTSeqNum
+            Bridge -> Bridge : [A] attach payload; map FTSeqNum to prediction key
+            Bridge -> FTQ : [N] reuse insert(tid, ft)
+            FTQ -> FTQ : [E] assert capacity; push_back(ft)
+            FTQ -> Probes : [E] ppFTQInsert->notify(ft)
+            opt FDP is configured
+                Probes -> Probes : [N] enumerate actual FetchBlock ranges
+                note right of Probes
+                  Existing FDP reads one start/end interval.
+                  Multi-block mode must not prefetch address gaps.
+                end note
+            end
+            FTQ --> Bridge : [E] insert returns (void)
+            Bridge -> BPU : [N] acceptFetchTarget(key, now)
+            BPU -> Q : [N] accept(key)
+            Bridge -> Bridge : [A] decrement per-cycle insert budget and credits
+        end
+    end
+end
+
+... CPU::tick invokes Fetch::tick after BAC::tick ...
+Fetch -> FTQ : [E] isHeadReady(tid), readHead(tid)
+FTQ --> Fetch : [E] FetchTargetPtr or unavailable
+ref over Fetch, FTQ
+  fetch_blocks_merge.puml / predecode_feedback.puml
+  process ordered blocks; bind every observed instruction/CFI
+end ref
+alt target fully consumed and prediction audit permits removal
+    Fetch -> FTQ : [E] popHead(tid), with new multi-block completion checks
+    alt legacy bpuHistory is still attached
+        FTQ -> FTQ : [E] mark Invalid; retain head; no remove notification
+        FTQ --> Fetch : [E] false, no entry removed
+        Fetch -> Fetch : [A] stop and request metadata repair
+    else head has no legacy bpuHistory
+        opt FTQ was Locked
+            FTQ -> FTQ : [E] mark Invalid; set return value false
+        end
+        FTQ -> Probes : [E] ppFTQRemove->notify(ft)
+        FTQ -> FTQ : [E] pop_front()
+        FTQ --> Fetch : [E] true normally; false if Locked, despite removal
+        Fetch -> BAC : [N] report key after confirming actual removal
+        BAC -> Bridge : [N] forward target-consumed notification
+        Bridge -> BPU : [N] onTargetConsumed(key), exactly once
+        BPU -> BPU : [A] retain history until model release point
+        opt pop returned false
+            Fetch -> Fetch : [A] stop and request recovery of invalid FTQ
+        end
+    end
+else unmatched prediction / boundary repair / incomplete target
+    Fetch -> Fetch : [A] retain target or enter predecode recovery; no false consumption
+end
+
+note over BPU, FTQ
+  issueCycle, readyCycle and FTQ acceptedCycle are different timestamps.
+  One FTQ slot holds one target group, possibly with several blocks.
+  Model retention credits may outlive physical FTQ pop.
+  New payloads keep legacy bpuHistory null; IBPU owns their ledger.
+  A false popHead return alone does not describe ownership changes.
+  Budget updates take effect at the chosen hardware phase;
+  Fetch frees entries after BAC admission in the current CPU tick order.
+end note
+@enduml

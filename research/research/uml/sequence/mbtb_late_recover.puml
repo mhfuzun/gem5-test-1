@@ -1,0 +1,164 @@
+@startuml mbtb_late_recover
+title Timed uBTB -> mBTB override and the required O3 recovery boundary
+autonumber
+hide footbox
+skinparam shadowing false
+skinparam maxMessageSize 95
+
+participant "CustomBPU : IBPU" as BPU
+participant "uBTB" as UBTB
+participant "mBTB pipeline" as MBTB
+participant "ResponseQueue / ledger" as Queue
+participant "Gem5BpuBridge" as Bridge
+participant "FTQ" as FTQ
+participant "Fetch / BlockFetchEngine" as Fetch
+participant "O3OverrideHook" as Hook
+participant "Commit / recovery arbitration" as Commit
+
+legend left
+  [E] Existing gem5 method or signal
+  [N] Proposed IBPU / bridge integration
+  [A] Illustrative internal operation, not an existing method
+  This is a design contract, not an implemented gem5 call path.
+endlegend
+
+== One dynamic query and two result times ==
+BPU -> BPU : [A] checkpoint history for key=(tid,id,generation)
+BPU -> MBTB : [A] accept slow query(key, queryPC, history), at t_issue
+BPU -> UBTB : [A] accept fast query for the same dynamic boundary
+UBTB --> BPU : [A] fast predicted blocks, ready at t_fast
+BPU -> Queue : [A] append fast target; advance speculative uBTB path
+opt FTQ slot and insertion budget available
+    Bridge -> BPU : [N] canSupply(now); peekFetchTarget()
+    BPU --> Bridge : [N] stable fast payload when ready
+    Bridge -> Bridge : [N] makeFT(payload)
+    Bridge -> FTQ : [N] reuse insert(tid, ft)
+    Bridge -> BPU : [N] acceptFetchTarget(key, now)
+end
+loop Later cycles before the slow result/override becomes ready
+    BPU -> UBTB : [A] predict next dynamic query on the fast path
+    BPU -> Queue : [A] record readyCycle and speculative dependencies
+    opt A fast-path target was admitted
+        Fetch -> FTQ : [E] readHead(tid)
+        FTQ --> Fetch : [E] published fast-path target
+    end
+end
+MBTB --> BPU : [A] slow result(key), ready at t_issue + n
+BPU -> BPU : [A] compare CFI sequence, direction, targets, span and nextQueryPC
+alt Same live prediction
+    BPU -> Queue : [A] mark slow result checked; no redirect
+else Different live prediction
+    BPU -> Queue : [A] enqueue OverrideEvent(eventId, cut, \
+replacementSuffix,\nreadyCycle=t_issue+n+redirectLatency)
+end
+note over BPU, Queue
+  Host lookahead may compute m results first using isolated checkpoints.
+  It must not expose the slow result before its simulated readyCycle,
+  advance live history twice, or add n again after detecting disagreement.
+  Issue interval and latency are separate. No FTQ slot is required to
+  advance an already accepted pipeline result or service a control event.
+  Wrong-path duration is measured from t_fast to effective redirect;
+  FTQ pressure and O3 recovery delay can change how far that path advances.
+end note
+
+== Bridge services controls even when FTQ is full ==
+Bridge -> Bridge : [N] forwardFeedback(timeBuffer): process existing \
+recovery first
+Bridge -> BPU : [N] peekOverride(now)
+BPU --> Bridge : [N] ready OverrideEvent, stable until acknowledged
+Bridge -> Bridge : [A] validate key/cut against live ledger, age and actual \
+resolution
+alt Cut was canceled, superseded, retired or already authoritatively resolved
+    Bridge -> BPU : [N] ackOverride(eventId), only after recording discard
+    note right of Bridge
+      ack means this event has been handled, not that a redirect succeeded.
+      PC equality is insufficient; reject stale dynamic identities.
+    end note
+else Event is live
+    Bridge -> Bridge : [N] applyOverride(event)
+    alt Affected suffix exists only in the BPU response queue
+        Bridge -> BPU : [N] onRecovery(cause=PredictorOverride, cut, \
+restartPC,\nresolvedOutcome absent)
+        BPU -> Queue : [A] rollback history at cut; invalidate younger \
+data/control\ninstall corrected suffix and nextQueryPC
+        Bridge -> BPU : [N] ackOverride(eventId), after application
+    else Affected suffix is in FTQ/assembly; no affected DynInst was built
+        Bridge -> FTQ : [N] squashAfter(cut); replaceSuffix(cut, blocks)
+        Bridge -> Fetch : [N] invalidateYounger(cut); repair cursor at \
+restartPC
+        Bridge -> BPU : [N] onRecovery(cause=PredictorOverride, cut, \
+restartPC,\nresolvedOutcome absent)
+        BPU -> Queue : [A] rollback and replace speculative suffix
+        Bridge -> BPU : [N] ackOverride(eventId), after application
+    else Affected DynInsts exist only in Fetch's local fetchQueue
+        Bridge -> Fetch : [A] selectively remove affected local DynInsts\n\
+repair source prediction and decoder/cursor consistently
+        Bridge -> FTQ : [N] squashAfter(cut); replaceSuffix(cut, blocks)
+        Bridge -> Fetch : [N] invalidateYounger(cut)
+        Bridge -> BPU : [N] onRecovery(cause=PredictorOverride, cut, \
+restartPC,\nresolvedOutcome absent)
+        Bridge -> BPU : [N] ackOverride(eventId), after all local repair is \
+applied
+        note right of Fetch
+          This selective Fetch repair is NEW. Existing doSquash()
+          clears all local fetchQueue entries, including a valid prefix.
+          Check whether the source branch prediction can be changed safely;
+          an earlier source that left Fetch requires the O3 path below.
+        end note
+    else Affected instruction OR source prediction has left Fetch
+        Bridge -> Hook : [N] requestSquash(cut, restartPC)
+        Hook -> Hook : [A] retain pending eventId + cut + prediction generation
+        Hook --> Bridge : [A] request queued; not yet accepted/applied
+        note over Bridge, Commit
+          New asynchronous protocol: freeze affected publication/consumption
+          until accepted or superseded, keep event pending, and do not ack yet.
+          The current class exposes request/arbitrate; it also needs a precise
+          completion status or callback before implementation can be correct.
+        end note
+        ... O3 recovery arbitration point ...
+        Hook -> Hook : [N] arbitrateWithExistingRecovery()
+        Hook -> Commit : [A] propose live predictor-only cut with source \
+identity
+        Commit -> Commit : [A] arbitrate against actual outcomes, traps and \
+older cuts\nrecheck source resolution and youngest valid boundary
+        alt Existing authoritative recovery supersedes the request
+            Commit --> Hook : [A] canceled/superseded completion
+            Hook --> Bridge : [A] report final disposition
+            Bridge -> BPU : [N] ackOverride(eventId), after discard is recorded
+        else Predictor-only recovery accepted
+            Commit -> Commit : [A] start suffix squash with explicit \
+predictor cause\npreserve/update source prediction safely, or replay source
+            Commit --> Fetch : [N] delayed recovery broadcast with predictor \
+cause\nreset affected stream and dynamic instructions
+            Commit --> Bridge : [N] delayed applied recovery with matching \
+eventId
+            Bridge -> FTQ : [N] squashAfter(cut); replaceSuffix(cut, blocks)
+            Bridge -> Fetch : [N] invalidateYounger(cut)
+            Bridge -> BPU : [N] onRecovery(cause=PredictorOverride, cut, \
+restartPC,\nresolvedOutcome absent)
+            BPU -> Queue : [A] rollback younger histories and pending \
+results\nadvance from the installed slow prediction
+            Bridge -> BPU : [N] ackOverride(eventId), after coordinated \
+application
+        end
+    end
+end
+note over BPU, Commit
+  Preserve unaffected prefix requests and history. Reject canceled replies
+  by RequestTag; cancel younger override events as well as data results.
+  A prediction may span several blocks: cut is key + block/CFI/instSeq,
+  not just an FTSeqNum or address interval.
+  Updating the source DynInst prediction must match ledger/history state.
+  If replaying the source is chosen, includeBoundary and restart PC change
+  accordingly; replay is not a free timing-equivalent implementation.
+end note
+note over Bridge, Commit
+  Existing anchors: BAC::checkAndUpdateBPUSignals(), bac.cc:290;
+  Fetch::doSquash()/bacResteer(), fetch.cc:710/762;
+  IEW::squashDueToBranch(), iew.cc:473; Commit::commit(), commit.cc:755.
+  None accepts predictor-only recovery today. Extending the arbitration
+  and broadcast is required; calling bacResteer() alone cannot remove
+  wrong-path Decode/Rename/ROB/IQ/LSQ instructions.
+  Do not encode a slow prediction as mispredictInst + actual branchTaken.
+end note
+@enduml

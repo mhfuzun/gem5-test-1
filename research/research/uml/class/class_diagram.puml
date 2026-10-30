@@ -1,0 +1,175 @@
+@startuml bpu_class_diagram_v2
+skinparam classAttributeIconSize 0
+title "BPU Class Diagram - Revised"
+
+interface IBTB {
+    +lookup(query: BTBQuery): BTBPrediction
+    +update(info: BTBUpdate): void
+    +reset(): void
+}
+
+class UBTB {
+    -entries: UBTBEntry[]
+    +lookup(query: BTBQuery): BTBPrediction
+    +update(info: BTBUpdate): void
+    +reset(): void
+}
+
+class MBTB {
+    -entries: MBTBEntry[]
+    +lookup(query: BTBQuery): BTBPrediction
+    +update(info: BTBUpdate): void
+    +reset(): void
+}
+
+class BTBQuery <<struct>> {
+    +pc: Addr
+    +tid: ThreadID
+    +fetchBlockSize: unsigned
+    +history: HistorySnapshot
+}
+
+class BTBPrediction <<struct>> {
+    +hit: bool
+    +provider: PredictorKind
+    +confidence: unsigned
+    +cfis: PredictedCFI[]
+}
+
+class PredictedCFI <<struct>> {
+    +valid: bool
+    +offset: unsigned
+    +slot: unsigned
+    +type: BranchType
+    +target: Addr
+    +taken: bool
+    +alwaysTaken: bool
+    +isIndirect: bool
+}
+
+class BTBUpdate <<struct>> {
+    +pc: Addr
+    +target: Addr
+    +tid: ThreadID
+    +taken: bool
+    +type: BranchType
+}
+
+class HistorySnapshot <<struct>> {
+    +ghr: GlobalHistory
+    +phr: PathHistory
+}
+
+class HistoryCheckpoint <<struct>> {
+    +id: uint64_t
+    +snapshot: HistorySnapshot
+}
+
+class BpuHistory {
+    -spec: HistorySnapshot
+    +makeCheckpoint(id: uint64_t): HistoryCheckpoint
+    +restore(cp: HistoryCheckpoint): void
+    +advance(pred: BTBPrediction): void
+}
+
+interface IBPU {
+    +reset(): void
+    +empty(): bool
+    +tick(): void
+    +canSupply(): bool
+    +supplyFetchTarget(): FetchTarget
+    +onPredecodeFeedback(fb: PredecodeFeedback): void
+    +onCommitUpdate(upd: CommitUpdate): void
+    +squash(epoch: uint64_t, id: uint64_t): void
+}
+
+class BPU {
+    -ubtb: UBTB
+    -mbtb: MBTB
+    -history: BpuHistory
+    -pending: ResponseQueue
+    +tick(): void
+    +canSupply(): bool
+    +supplyFetchTarget(): FetchTarget
+    +onPredecodeFeedback(fb: PredecodeFeedback): void
+    +onCommitUpdate(upd: CommitUpdate): void
+    +squash(epoch: uint64_t, id: uint64_t): void
+}
+
+class ResponseQueue {
+    +push(resp: PredictionResponse): void
+    +popReady(now: Tick): PredictionResponse[]
+    +invalidateYounger(id: uint64_t): void
+    +empty(): bool
+}
+
+class PredictionResponse <<struct>> {
+    +id: uint64_t
+    +epoch: uint64_t
+    +source: PredictorKind
+    +readyCycle: Tick
+    +prediction: BTBPrediction
+    +checkpoint: HistoryCheckpoint
+}
+
+class FetchTarget {
+    +id: uint64_t
+    +epoch: uint64_t
+    +source: PredictorKind
+    +readyCycle: Tick
+    +predictedTakenCount: unsigned
+    +blocks: FetchBlock[]
+    +checkpoint: HistoryCheckpoint
+}
+
+class FetchBlock {
+    +startAddr: Addr
+    +endAddr: Addr
+    +takenPoint: PredictedCFI
+    +isFallthrough(): bool
+}
+
+class PredecodeFeedback <<struct>> {
+    +id: uint64_t
+    +epoch: uint64_t
+    +actualCfis: PredictedCFI[]
+    +redirect: bool
+    +redirectTarget: Addr
+}
+
+class CommitUpdate <<struct>> {
+    +pc: Addr
+    +target: Addr
+    +taken: bool
+    +type: BranchType
+}
+
+IBTB <|.. UBTB
+IBTB <|.. MBTB
+IBPU <|.. BPU
+
+IBTB ..> BTBQuery
+IBTB ..> BTBPrediction
+IBTB ..> BTBUpdate
+
+BTBPrediction ..> PredictedCFI
+BTBQuery *-- HistorySnapshot
+HistoryCheckpoint *-- HistorySnapshot
+BpuHistory *-- HistorySnapshot
+
+BPU *-- UBTB
+BPU *-- MBTB
+BPU *-- BpuHistory
+BPU *-- ResponseQueue
+
+ResponseQueue ..> PredictionResponse
+PredictionResponse *-- BTBPrediction
+PredictionResponse *-- HistoryCheckpoint
+
+IBPU ..> FetchTarget
+FetchTarget *-- FetchBlock
+FetchBlock ..> PredictedCFI
+
+IBPU ..> PredecodeFeedback
+IBPU ..> CommitUpdate
+@enduml

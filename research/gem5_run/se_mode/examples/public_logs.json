@@ -1,0 +1,15 @@
+{
+    "logs": [
+        {
+            "id": "batch",
+            "label": "train_reduced_retry01.log",
+            "path": "research-result/logs/train_reduced_retry01.log"
+        },
+        {
+            "id": "report",
+            "label": "Batch durum raporu",
+            "path":
+                "research-result/batch_results/train_reduced_retry01/batch_report.md"
+        }
+    ]
+}

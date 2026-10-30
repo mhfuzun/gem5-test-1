@@ -1,5 +1,12 @@
 # RISC-V SE + Atomic + SimPoint + O3
 
+Checkpoint sonrası toplu Step C için `batch_o3_run.py` tam workload ID'lerini
+`--tests`, Step B dizin adını `--run-id warmup_50000000` ile alır.
+`run_o3_full.py --test 502.gcc_r.cmd002.cpugcc_r` tam O3 referansı üretir.
+Mevcut batch dizininin seçimi, deney kimlikleri, güvenli yeni
+çıktı dizinleri ve ayrıntılı CPI raporları
+[`O3_BATCH_PIPELINE.md`](O3_BATCH_PIPELINE.md) içinde anlatılmıştır.
+
 Bu dizin, tek iş parçacıklı RISC-V SE workload'ları için üç aşamalı ve
 manifest kontrollü bir SimPoint akışı sağlar:
 
@@ -18,6 +25,13 @@ paralel yürüten `run_spec_batch.py` de bulunur. Repo içindeki `gem5.fast`/
 `gem5.opt` seçimi, doğrudan train dizini, `--jobs` zamanlaması, resume
 kuralları ve `research-result` altında üretilen batch raporu
 [`BATCH_SPEC_PIPELINE.md`](BATCH_SPEC_PIPELINE.md) içinde açıklanmıştır.
+
+Checkpoint sonrası O3 koşuları, warmup doğrulaması, ağırlıklı CPI/IPC ve
+yayın için baseline karşılaştırma planı
+[`O3_EXPERIMENT_PLAN.md`](O3_EXPERIMENT_PLAN.md) içinde açıklanmıştır.
+
+Telefondan girişsiz HTTPS erişimiyle yalnızca seçilmiş logları izlemek için
+[`LOG_VIEWER.md`](LOG_VIEWER.md) ve `log_viewer.py` kullanılabilir.
 
 ## Ön koşullar
 
@@ -277,3 +291,17 @@ python3 -m unittest discover -s research/gem5_run/se_mode/tests -v
   modeli değişebilir.
 - Kaynak SPEC run dizini pristine tutulmalıdır. Yeniden koşuda sonuç dizinini
   silmek için yalnızca hedef aşamaya açıkça `--force` verilir.
+
+
+### tmux kullanımı
+Faydalı komutlar
+| İşlem |	Komut |
+|-------|-------|
+| Aktif oturumları listele |	tmux ls |
+| Oturuma bağlan |	tmux attach -t gem5 |
+| Yeni oturum oluştur |	tmux new -s gem5 |
+| Oturumdan ayrıl (kapatmadan) |	Ctrl+B, ardından D |
+| Oturumu sonlandır	| tmux kill-session -t gem5 |
+| Tüm oturumları kapat |	tmux kill-server |
+| Oturumdaki pencereleri listele |	tmux list-windows -t gem5 |
+| Tüm oturumlardaki panelleri listele |	tmux list-panes -a |

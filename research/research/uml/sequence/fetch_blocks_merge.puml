@@ -1,0 +1,209 @@
+@startuml fetch_blocks_merge
+title FTQ target -> ordered block bytes -> existing Decode path
+autonumber
+hide footbox
+skinparam shadowing false
+skinparam maxMessageSize 95
+
+legend left
+  |= Prefix |= Meaning |
+  | [E] | Existing gem5 call, return, or signal |
+  | [N] | Proposed interface or integration hook |
+  | [A] | Algorithm step / private plumbing, not a C++ method |
+  Timing callbacks and stage ticks can occur in different cycles.
+endlegend
+
+participant "O3 CPU / event queue" as CPU
+participant Fetch
+participant FTQ
+participant BlockFetchEngine as Engine
+participant MergedFetchStream as Stream
+participant "MMU / ITLB" as MMU
+participant "FetchTranslation" as Translation
+participant "Fetch::IcachePort" as Port
+participant "I-cache / memory" as Cache
+participant "ISA decoder" as Decoder
+participant "FetchStruct time buffer" as Buffer
+participant Decode
+
+CPU -> Fetch : [E] tick() -> fetch(status_change)
+Fetch -> Fetch : [E] ftqReady(tid, status_change)
+Fetch -> FTQ : [E] isHeadReady(tid)
+FTQ --> Fetch : [E] ready / empty or invalid
+alt target ready
+    Fetch -> FTQ : [E] readHead(tid)
+    FTQ --> Fetch : [E] FetchTargetPtr
+    Fetch -> Engine : [N] begin(ft), once for a new target
+    note over Fetch, Engine
+      One FTQ entry contains N ordered FetchBlocks.
+      Replace legacy whole-target inRange() checks with active-block checks.
+      nextQueryPC is NOT the instruction fetch address.
+    end note
+else no target
+    Fetch -> Fetch : [E] set FtqWait; return from fetch()
+end
+
+group Repeated scheduling opportunities while this target remains live
+    Fetch -> Engine : [N] nextRead()
+    Engine --> Fetch : [N] optional FetchRead(tag, vaddr, size, instructionPC)
+    note over Fetch, Stream
+      Minimum-change mode: at most one demand request/thread in flight.
+      All request sites, including pipelineIcacheAccesses(), use this cursor.
+      Keep the shared retryPkt / cacheBlocked arbitration across threads.
+      A block can need several fragments or reuse already buffered bytes.
+      Fragment count is not necessarily the number of FetchBlocks.
+    end note
+    alt required bytes already buffered
+        Fetch -> Engine : [N] onBytes(tag, valid cached bytes)
+        Engine -> Stream : [N] append(blockIndex, fragment)
+    else request permitted and no live request for this thread
+        Fetch -> Fetch : [A] reserve RequestTag for this demand read
+        Fetch -> Fetch : [E] fetchCacheLine(vaddr, tid, instructionPC)
+        note right of Fetch
+          Existing helper aligns to fetchBufferSize and reads that size.
+          FetchRead.size does not silently change its three-argument API.
+          Reuse aligned requests and select each fragment's valid bytes.
+          Preserve cacheBlocked, interrupt, and translation guards.
+        end note
+        Fetch -> Fetch : [A] associate newly created RequestPtr with RequestTag
+        Fetch -> MMU : [E] translateTiming(req, tc, translation, Execute)
+        MMU -> Translation : [E] finish(fault, req, tc, mode)
+        Translation -> Fetch : [E] finishTranslation(fault, req)
+        note over MMU, Translation
+          Translation can finish inline or from a later event.
+          FetchTranslation deletes itself after forwarding the result.
+        end note
+        alt canceled request or stale translation
+            Fetch -> Fetch : [E] reject mismatched status / memReq identity
+            Fetch -> Fetch : [A] also validate live RequestTag after suffix recovery
+        else live translation fault
+            Fetch -> Engine : [N] onFault(tag, fault)
+            note over Fetch, Engine
+              Proposed hook buffers the fault at its stream position.
+              At the oldest undecoded instruction, use the existing fault-
+              carrying nop path in finishTranslation: buildInst(),
+              setNotAnInst(), setPredTarg(), fault, TrapPending.
+              If fetchWidth / fetchQueue capacity is unavailable,
+              retain the fault and reschedule as FinishTranslationEvent does.
+              Use the faulting instruction PC, not the next block's PC.
+            end note
+        else translated address outside physical memory
+            Fetch -> Fetch : [E] set NoGoodAddr; clear memReq; await recovery
+        else live successful translation
+            Fetch -> Fetch : [E] create ReadReq packet; invalidate fetchBuffer
+            Fetch -> Port : [E] sendTimingReq(packet)
+            Port -> Cache : [E] timing request delivery
+            Cache --> Port : [E] request accepted or refused
+            Port --> Fetch : [E] bool accepted
+            alt refused
+                Fetch -> Fetch : [E] IcacheWaitRetry; save retryPkt / retryTid;
+                Fetch -> Fetch : [E] cacheBlocked = true
+                ... I-cache later permits retry ...
+                Cache -> Port : [E] recvReqRetry()
+                Port -> Fetch : [E] recvReqRetry()
+                alt retry request still live
+                    Fetch -> Port : [E] sendTimingReq(retryPkt)
+                    Port -> Cache : [E] retry same packet
+                    note over Fetch, Cache
+                      Another refusal keeps the retry pending.
+                      Success sets IcacheWaitResponse and clears retry state.
+                    end note
+                else canceled or trap pending
+                    Fetch -> Fetch : [E] discard canceled retry / clear cacheBlocked
+                end
+            else accepted
+                Fetch -> Fetch : [E] set IcacheWaitResponse; notify request probe
+            end
+            opt request accepted, initially or after retry
+                ... response arrives as a memory timing event ...
+                Cache -> Port : [E] recvTimingResp(packet)
+                Port -> Fetch : [E] processCacheCompletion(packet)
+                alt stale or canceled completion
+                    Fetch -> Fetch : [E] reject if status / packet->req != memReq
+                    Fetch -> Fetch : [A] also reject canceled RequestTag; keep surviving prefix
+                    Fetch -> Fetch : [E] delete packet
+                else live completion
+                    Fetch -> Fetch : [E] copy bytes; fetchBufferValid = true
+                    Fetch -> Engine : [N] onBytes(tag, valid fragment bytes)
+                    Engine -> Stream : [N] append(blockIndex, fragment)
+                    Fetch -> CPU : [E] wakeCPU()
+                    Fetch -> Fetch : [E] activate; set completion/block status;
+                    Fetch -> Fetch : [E] notify completion probe; delete packet; clear memReq
+                end
+            end
+        end
+    end
+end
+
+... next eligible Fetch::tick; no decoding inside memory callbacks ...
+CPU -> Fetch : [E] tick() -> fetch(status_change)
+Fetch -> Engine : [N] peekDecodeSlice()
+Engine -> Stream : [N] peekReadyPrefix()
+Stream --> Engine : [N] optional PC-tagged FetchSlice
+Engine --> Fetch : [N] optional FetchSlice
+alt ordered head is a translation fault
+    alt fetchWidth and fetchQueue capacity available
+        Fetch -> Fetch : [E] buildInst(..., faultingPC, faultingPC, false)
+        Fetch -> Fetch : [E] setNotAnInst(); setPredTarg(faultingPC); attach fault
+        Fetch -> Fetch : [E] set TrapPending; mark activity
+        note right of Fetch
+          Reuse the existing fault-carrier operations from finishTranslation.
+          Their emission is newly gated by ordered stream readiness.
+          Younger faulting blocks cannot overtake older instructions.
+        end note
+    else capacity unavailable
+        Fetch -> Fetch : [A] retain head fault; retry on an eligible stage/event
+    end
+else ready bytes at predicted execution head
+    Fetch -> Decoder : [E] moreBytesPtr() / moreBytes(realPC, fetchAddr)
+    Fetch -> Decoder : [E] instReady(); decode(realPC)
+    Decoder --> Fetch : [E] StaticInst (or request more contiguous bytes)
+    ref over Fetch, Engine, Decoder
+      predecode_feedback.puml:
+      buildInst -> BAC::updatePC -> bridge / IBPU binding -> cursor advance
+    end ref
+    note over Engine, Decoder
+      Decode the ready prefix without waiting for every block.
+      Merge order is block order, not address order.
+      Example: 0x1000..0x100c, then 0x8000..0x800c.
+      Each DynInst retains its real PC; do not fetch the intervening gap.
+      Join partial instructions only across contiguous fragments.
+      Never join a partial instruction across a taken discontinuity.
+    end note
+else head bytes not ready
+    Fetch -> Fetch : [A] stop this decode attempt; retain target/cursor
+end
+
+group Tail of the same Fetch::tick
+    opt issuePipelinedIfetch[tid]
+        Fetch -> Fetch : [E] pipelineIcacheAccesses(tid)
+        Fetch -> Engine : [N] nextRead() instead of legacy next-PC arithmetic
+        note right of Fetch
+          Route an eligible read through the same request path above.
+          Do not create a second requester beside BlockFetchEngine.
+        end note
+    end
+    loop up to decodeWidth, with per-thread Decode stalls respected
+        Fetch -> Fetch : [E] select fetchQueue[tid].front()
+        Fetch -> Buffer : [E] write toDecode->insts[toDecode->size++]
+        Fetch -> Fetch : [E] fetchQueue[tid].pop_front()
+    end
+end
+... configured fetchToDecodeDelay, via the stage time buffer ...
+CPU -> Decode : [E] tick()
+Decode -> Buffer : [E] sortInsts() reads fromFetch at -fetchToDecodeDelay
+note over Buffer, Decode
+  This is delayed data delivery, not a direct Fetch::decode() call.
+  ISA byte decoding already occurred in Fetch.
+end note
+
+note over Fetch, Cache
+  Existing anchors: src/cpu/o3/fetch.cc
+  ftqReady:513; fetchCacheLine:529; finishTranslation:578;
+  processCacheCompletion:356; fetch:1058; tick:821;
+  recvReqRetry:1403; pipelineIcacheAccesses:1574;
+  IcachePort callbacks:1658,1670.
+  fetch.hh: FetchTranslation::finish:119, FinishTranslationEvent::process:149.
+  decode.cc: setFetchQueue:212, sortInsts:484.
+end note
+@enduml

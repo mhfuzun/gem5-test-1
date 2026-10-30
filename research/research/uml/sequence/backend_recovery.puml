@@ -1,0 +1,130 @@
+@startuml backend_recovery
+title Existing O3 recovery sources and the new IBPU feedback boundary
+autonumber
+hide footbox
+skinparam shadowing false
+skinparam maxMessageSize 95
+
+participant "IEW" as IEW
+participant "iewQueue / IEWStruct" as IQ
+participant "Commit / ROB" as Commit
+participant "timeBuffer / TimeStruct" as TB
+participant "Decode" as Decode
+participant "Fetch" as Fetch
+participant "BAC" as BAC
+participant "Gem5BpuBridge" as Bridge
+participant "FTQ + BlockFetchEngine" as Frontend
+participant "IBPU" as BPU
+
+legend left
+  [E] Existing gem5 method or signal
+  [N] Proposed IBPU / bridge integration
+  [A] Illustrative internal operation, not an existing method
+  Signal arrows are delayed delivery, not direct C++ calls.
+endlegend
+
+== Execute discovers an actual misprediction ==
+IEW -> IEW : [E] executeInsts(): inst->mispredicted()
+IEW -> IEW : [E] squashDueToBranch(inst, tid)
+IEW -> IQ : [E] squash=true; squashedSeqNum=inst->seqNum\n\
+includeSquashInst=false; mispredictInst=inst\nbranchTaken; pc=actual next PC
+note right of IEW
+  IEW keeps the oldest squash request it has seen.
+  Memory-order violations use includeSquashInst=true.
+  Source: iew.cc:473, 497, 1279.
+end note
+... iewToCommitDelay via iewQueue ...
+IQ --> Commit : [E] fromIEW squash fields
+Commit -> Commit : [E] commit(): arbitrate with traps / TC / squash-after\n\
+check squashedSeqNum <= youngestSeqNum
+Commit -> Commit : [E] rob->squash(cut, tid)
+Commit -> TB : [E] commitInfo: squash=true; doneSeqNum=cut\n\
+robSquashing=true; pc; mispredictInst; branchTaken
+note right of Commit
+  Source: commit.cc:755-846; comm.hh:TimeStruct::CommitComm.
+  The same doneSeqNum field means a squash boundary here;
+  it does NOT announce retirement of that instruction.
+end note
+... configured stage delays; BAC runs before Fetch in CPU::tick() ...
+TB --> BAC : [E] fromCommit after commitToFetchDelay
+BAC -> BAC : [E] checkAndUpdateBPUSignals(tid): commit squash first
+BAC -> Bridge : [N] forwardFeedback(timeBuffer)
+Bridge -> Frontend : [N] invalidate affected payloads, slices and requests
+Bridge -> BPU : [N] onRecovery(cause=Execute / Trap / Other, cut, \
+restartPC,\nresolvedOutcome only for an executed control instruction)
+BPU -> BPU : [A] restore speculative history; discard younger tokens\n\
+retain corrected surviving branch until retirement
+note over BAC, BPU
+  IBPU mode replaces legacy squashBpuHistories()/bpu->squash().
+  Keep the existing BAC PC/status/FTQ recovery responsibilities.
+  Never call both history owners for the same prediction.
+  Existing route: bac.cc:290-330; squash():484.
+end note
+TB --> Fetch : [E] commitInfo.squash after commitToFetchDelay
+Fetch -> Fetch : [E] squashFromCommit() -> doSquash()\n\
+reset PC/decoder/requests; clear local fetchQueue
+Fetch -> Frontend : [N] cancel affected assembly; reject canceled completions
+note over Commit, Fetch
+  Decode / Rename / IEW also consume the existing commit broadcast
+  after their configured delays. ROB, IQ, LSQ and rename recovery
+  stay on the existing O3 path; they do not call IBPU directly.
+  Fetch also removes instructions not in ROB (fetch.cc:698).
+end note
+
+== Decode discovers a wrong direct target earlier ==
+Decode -> Decode : [E] decodeInsts(): direct control,\n\
+unconditional or predicted taken, target != readPredTarg()
+Decode -> Decode : [E] squash(inst, false, tid)
+Decode -> TB : [E] decodeInfo: squash=true; doneSeqNum=inst->seqNum\n\
+nextPC=branchTarget(); branchTaken; mispredictInst
+Decode -> Decode : [E] clear younger decode state; removeInstsUntil(seq, \
+tid)\nsetPredTarg(correct direct target)
+... decodeToFetchDelay ...
+TB --> BAC : [E] fromDecode->decodeInfo
+BAC -> BAC : [E] commit squash? return\n\
+else commit doneSeqNum? update first\nthen process decode squash and return
+BAC -> Bridge : [N] forwardFeedback(timeBuffer)
+Bridge -> Frontend : [N] invalidate affected frontend suffix
+Bridge -> BPU : [N] onRecovery(cause=Decode, cut, restartPC,\n\
+resolvedOutcome absent unless fully known)
+BPU -> BPU : [A] repair direct-target metadata and speculative history
+TB --> Fetch : [E] decodeInfo.squash (unless already Squashing)
+Fetch -> Fetch : [E] squashFromDecode() -> doSquash()\n\
+removeInstsUntil(seq, tid)
+Fetch -> Frontend : [N] cancel affected assembly and requests
+note over Decode, BPU
+  Direct-target information is known at decode; the direction of
+  a conditional branch still needs execution. Preserve that distinction.
+  CFI.isPrediction=false alone does not prove execution resolution.
+  Unexpected non-control predicted taken currently panics; the code
+  below that panic is not a working recovery path.
+  Sources: decode.cc:311, 705-741; bac.cc:331-359;
+  fetch.cc:685, 950; comm.hh:TimeStruct::DecodeComm.
+end note
+
+== Fetch requests a BAC resteer ==
+Fetch -> Fetch : [E] fetch(): current PC outside FT range\n\
+or updatePC/predecode requests repair
+Fetch -> Fetch : [E] bacResteer(newPC, tid)
+Fetch -> TB : [E] fetchInfo.squash=true; nextPC=newPC
+Fetch -> Frontend : [E] ftq->invalidate(tid)
+Fetch -> Bridge : [N] retain exact repair boundary from binding/cursor
+note right of Bridge
+  Existing FetchComm carries only squash and nextPC.
+  Multi-block recovery needs a sidecar RecoveryPoint or a small
+  FetchComm extension: key/block/CFI/instSeq, not just the PC.
+end note
+... fetchToBacDelay ...
+TB --> BAC : [E] fromFetch->fetchInfo
+BAC -> BAC : [E] check only after commit/decode processing\n\
+and only when bacStatus != Squashing
+BAC -> Bridge : [N] forwardFeedback(timeBuffer)
+Bridge -> Frontend : [N] discard bad suffix; preserve valid consumed bindings
+Bridge -> BPU : [N] onRecovery(cause=FetchRepair, cut, restartPC,\n\
+resolvedOutcome absent)
+note over Fetch, BPU
+  bacResteer is Fetch -> BAC, not a BPU -> backend redirect hook.
+  Sources: fetch.cc:762, 1102, 1377; bac.cc:361-370.
+  Wiring/delays: bac.cc:120-122; fetch.cc:250-253.
+end note
+@enduml

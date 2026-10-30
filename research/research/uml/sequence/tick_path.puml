@@ -1,0 +1,136 @@
+@startuml tick_path
+title CPU tick -> BAC -> IBPU -> FTQ -> Fetch: integration order
+hide footbox
+autonumber
+skinparam sequenceMessageAlign left
+skinparam maxMessageSize 95
+
+legend left
+  [E] Existing gem5 call or signal
+  [N] New IBPU / bridge / helper connection
+  [A] Model algorithm; illustrative private operation
+  Dashed arrows are returns; time-buffer writes are not direct callbacks.
+endlegend
+
+participant "gem5 event queue" as Events
+participant "o3::CPU" as CPU
+participant "o3::BAC" as BAC
+participant "Gem5BpuBridge" as Bridge
+participant "selected IBPU" as BPU
+participant "o3::FTQ" as FTQ
+participant "o3::Fetch" as Fetch
+participant "Decode / Rename / IEW / Commit" as Stages
+participant "O3 time buffers" as TB
+
+note over CPU, BAC
+  Sources: cpu.cc CPU::tick() (368), bac.cc BAC::tick() (503),
+  BAC::checkSignalsAndUpdate() (375),
+  BAC::checkAndUpdateBPUSignals() (290).
+  Scope: decoupledFrontEnd = true, with custom or legacy BPU.
+  [N] arrows describe a proposed implementation, not existing C++.
+  Insert mode dispatch INSIDE the existing feedback method:
+  IBPU forwarding replaces legacy bpu update/squash calls.
+  Drain history cleanup in checkSignalsAndUpdate uses the same dispatch.
+end note
+
+Events -> CPU : [E] tickEvent -> CPU::tick()
+CPU -> CPU : [E] update cycle counters
+CPU -> BAC : [E] tick()
+loop each active thread (current decoupled mode supports one thread)
+    BAC -> BAC : [E] checkSignalsAndUpdate(tid)
+    BAC -> BAC : [E] checkAndUpdateBPUSignals(tid)
+    BAC -> TB : [E] read fromCommit / fromDecode / fromFetch wires
+    TB --> BAC : [E] signals visible after configured backward delays
+    alt bpuModel is configured
+        BAC -> Bridge : [N] forwardFeedback(timeBuffer)
+        ref over Bridge, BPU
+          commit_update.puml / backend_recovery.puml
+          commit squash wins; otherwise commit frontier update,
+          then decode squash, then fetch repair
+        end ref
+        BAC -> FTQ : [E] isReady / isLocked / isFull / numFreeEntries
+        FTQ --> BAC : [E] current queue status and free entries
+        BAC -> BAC : [N] build credits and admission permission
+        BAC -> Bridge : [N] service(curCycle(), credits)
+        Bridge -> BPU : [N] tick(now, credits)
+        ref over BPU
+          bpu_lookahead.puml
+          progress due work, validate forecast, schedule permitted issues
+        end ref
+        BPU --> Bridge : [N] due data/control events available
+        Bridge -> BPU : [N] peekOverride(now)
+        alt an override event is due (validate stale events too)
+            ref over Bridge, Fetch
+              mbtb_late_recover.puml
+              apply local correction or await O3 recovery arbitration
+            end ref
+        end
+        alt admission allowed and no unresolved affected-path recovery
+            ref over Bridge, FTQ
+              ftq request.puml
+              peek -> insert -> accept, bounded by current credits
+            end ref
+        else FTQ full/locked, draining or recovery pending
+            Bridge -> Bridge : [A] skip affected data admission; keep due work alive
+        end
+        Bridge -> BPU : [N] nextWakeup()
+        BPU --> Bridge : [N] optional future cycle deadline
+        Bridge -> CPU : [N] arrange model wakeup (lifecycle.puml)
+        Bridge --> BAC : [N] service complete; report current activity
+    else legacy configuration
+        note over BAC
+          Existing BPredUnit update/squash calls remain inside
+          checkAndUpdateBPUSignals(). Do not also invoke IBPU.
+        end note
+        opt bacStatus == Running
+            BAC -> BAC : [E] generateFetchTargets(tid, status_change)
+            BAC -> FTQ : [E] insert(tid, curFT)
+        end
+    end
+end
+BAC -> BAC : [E] updateBACStatus() when status changes
+opt activity occurred
+    BAC -> CPU : [E] activityThisCycle()
+end
+BAC --> CPU : [E] return
+
+CPU -> Fetch : [E] tick()
+ref over Fetch, FTQ
+  fetch_blocks_merge.puml / predecode_feedback.puml
+  queue head -> memory fragments -> decoder -> prediction binding
+end ref
+Fetch -> TB : [E] write toDecode->insts from fetchQueue (up to decodeWidth)
+Fetch --> CPU : [E] return
+CPU -> Stages : [E] decode.tick()
+opt Decode produces backward information
+    Stages -> TB : [E] write decodeInfo / stalls during decode.tick()
+end
+CPU -> Stages : [E] rename.tick()
+opt Rename produces backward information
+    Stages -> TB : [E] write stall / unblock signals during rename.tick()
+end
+CPU -> Stages : [E] iew.tick()
+opt IEW produces results or recovery information
+    Stages -> TB : [E] write iewQueue / iewInfo during iew.tick()
+end
+CPU -> Stages : [E] commit.tick()
+opt Commit produces retirement / recovery information
+    Stages -> TB : [E] write commitInfo during commit.tick()
+end
+CPU -> TB : [E] timeBuffer.advance(); fetchQueue.advance();
+CPU -> TB : [E] decodeQueue.advance(); renameQueue.advance(); iewQueue.advance()
+CPU -> CPU : [E] activityRec.advance(); cleanup; next-tick scheduling; tryDrain()
+
+note over BAC, Fetch
+  Model service must run even when legacy BAC status is FTQFull.
+  FTQ capacity gates admission/new issue, not all pipeline completion.
+  BAC precedes Fetch: an admitted head can be seen in this CPU tick.
+  A configured publication delay must be reflected in readyCycle;
+  the current bacToFetchDelay member does not itself gate FTQ reads.
+end note
+note over Stages, TB
+  Calls occur in the order above, but signals traverse their time buffers.
+  A Commit result produced here is not delivered to BAC earlier in this tick.
+  Detailed ordering of each source is in backend_recovery.puml.
+end note
+@enduml

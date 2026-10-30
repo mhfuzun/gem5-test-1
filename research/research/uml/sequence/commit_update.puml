@@ -1,0 +1,117 @@
+@startuml commit_update
+title Cumulative O3 retirement -> IBPU ledger -> model-private BTB updates
+autonumber
+hide footbox
+skinparam shadowing false
+skinparam maxMessageSize 95
+
+participant "Fetch / BAC" as Fetch
+participant "Gem5BpuBridge" as Bridge
+participant "IBPU implementation" as BPU
+participant "PredictionLedger" as Ledger
+participant "Model-private BTB(s)" as BTB
+participant "Commit / ROB" as Commit
+participant "timeBuffer / commitInfo" as TB
+
+legend left
+  [E] Existing gem5 method or signal
+  [N] Proposed IBPU / bridge integration
+  [A] Illustrative internal operation, not an existing method
+endlegend
+
+== Keep the original lookup and dynamic branch identity ==
+BPU -> BTB : [N] lookup(BTBQuery{addr=original lookup base})
+BTB --> BPU : [N] BTBResult{cfi_list, commitData}
+BPU -> Ledger : [A] retain lookup metadata and speculative history\n\
+under PredictionKey, block index and CfiId
+Fetch -> Bridge : [N] bindAndPredict(inst, cursor)
+Bridge -> BPU : [N] onPredecodeFeedback(key, blockIndex, instSeq,\n\
+pc, staticInst, matchedCfi)
+BPU -> Ledger : [N] bind(fb): InstSeqNum -> BranchRef
+BPU --> Bridge : [N] PredictionBinding{branch, taken, nextPC, needsRepair}
+note over BPU, BTB
+  PC alone is not a dynamic identity (loops can revisit it).
+  commitData belongs to this lookup, not to the most recent lookup.
+  Multiple CFI bindings may share lookup metadata; retain it until
+  every dependent commit/recovery use has finished.
+  A miss can allocate with commitData=NULL.
+end note
+
+== Recovery corrects state before later retirement ==
+opt An executed branch mispredict / earlier frontend correction arrives
+    Fetch -> Bridge : [N] forwardFeedback(timeBuffer)
+    Bridge -> BPU : [N] onRecovery(event)
+    BPU -> Ledger : [N] recover(event)
+    Ledger -> Ledger : [A] remove younger bindings; preserve surviving \
+boundary\nstore actual outcome when supplied; otherwise only known correction
+end
+note over BPU, Ledger
+  See backend_recovery.puml. Wrong-path bindings removed by recovery
+  must never be trained merely because their seqNum is <= a later watermark.
+  A predictor override supplies a prediction, not an actual outcome.
+end note
+
+== Existing Commit publishes one cumulative watermark per thread ==
+loop Up to commitWidth successful retirements
+    Commit -> Commit : [E] commitInsts(): examine ROB head
+    alt head_inst is already squashed
+        Commit -> Commit : [E] rob->retireHead(); ppSquash->notify(head_inst)
+        note right of Commit
+          No successful-commit watermark is generated for this removal.
+        end note
+    else Unsquashed instruction
+        Commit -> Commit : [E] commitHead(head_inst, num_committed)
+        opt commitHead succeeds
+            Commit -> TB : [E] commitInfo[tid].doneSeqNum=head_inst->seqNum
+        end
+    end
+end
+note over Commit, TB
+  Later successful retirements overwrite doneSeqNum in this cycle.
+  BAC receives the youngest committed sequence number, not a per-branch
+  Commit -> IBPU callback. Source: commit.cc:954-1013.
+end note
+... commitToFetchDelay ...
+TB --> Fetch : [E] BAC::checkAndUpdateBPUSignals(tid)
+alt commitInfo.squash == true
+    Fetch -> Bridge : [N] forwardFeedback(timeBuffer): recovery branch
+    Bridge -> BPU : [N] onRecovery(event)
+    note over Fetch, BPU
+      doneSeqNum is a squash cut in this branch.
+      Do not call onCommitUpdate() for that same broadcast.
+      BAC returns before decode/fetch signal processing.
+    end note
+else doneSeqNum != 0
+    Fetch -> Bridge : [N] forwardFeedback(timeBuffer): retirement branch
+    Bridge -> BPU : [N] onCommitUpdate(CommitUpdate{tid, \
+throughSeq=doneSeqNum})
+    BPU -> Ledger : [N] commitThrough(tid, throughSeq)
+    loop Surviving bound branches <= throughSeq, oldest first
+        Ledger --> BPU : [A] branch identity, final training outcome,\n\
+original query base, history and original commitData
+        BPU -> BPU : [A] update direction predictor / RAS / indirect state\n\
+according to this model's commit policy
+        opt This branch is eligible for BTB training
+            BPU -> BTB : [N] update(BTBUpdate{addr=original query base,\n\
+cfi_result=observed/training CFI, commitData=matching lookup})
+        end
+        BPU -> Ledger : [A] retire binding; release metadata exactly once\n\
+after its final dependent user
+    end
+end
+note over Fetch, BPU
+  After a non-squash commit update, BAC still checks decode then fetch.
+  Existing hook to replace: bpu->update(doneSeqNum, tid), bac.cc:331-335.
+  Legacy behavior: BPredUnit::update() walks histories oldest first;
+  commitBranch() updates direction, indirect/RAS and eligible BTB entries
+  (src/cpu/pred/bpred_unit.cc:336-399).
+end note
+note over BPU, Ledger
+  There is no actual-outcome payload in the normal commit watermark.
+  As in the legacy predictor, a surviving prediction is validated by
+  successful execution/retirement, or corrected by recovery beforehand.
+  The ledger must track the same prediction used by DynInst and execution.
+  Models requiring more execution data need an explicit additional hook.
+  FTQ pop/onTargetConsumed never means this branch has committed.
+end note
+@enduml
